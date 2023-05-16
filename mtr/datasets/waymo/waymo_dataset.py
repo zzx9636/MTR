@@ -69,6 +69,13 @@ class WaymoDataset(DatasetTemplate):
         ret_infos = self.create_scene_level_data(index)
 
         return ret_infos
+    
+    def load_info(self, index):
+        info = self.infos[index]
+        scene_id = info['scenario_id']
+        with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
+            info = pickle.load(f)
+        return scene_id, info
 
     def create_scene_level_data(self, index):
         """
@@ -78,10 +85,11 @@ class WaymoDataset(DatasetTemplate):
         Returns:
 
         """
-        info = self.infos[index]
-        scene_id = info['scenario_id']
-        with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
-            info = pickle.load(f)
+        # info = self.infos[index]
+        # scene_id = info['scenario_id']
+        # with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
+        #     info = pickle.load(f)
+        scene_id, info = self.load_info(index)
 
         sdc_track_index = info['sdc_track_index']
         current_time_index = info['current_time_index']
@@ -467,7 +475,7 @@ class WaymoDataset(DatasetTemplate):
                 pred_scores: (num_center_objects, num_modes)
                 pred_trajs: (num_center_objects, num_modes, num_timestamps, 7)
 
-              input_dict:
+            input_dict:
                 center_objects_world: (num_center_objects, 10)
                 center_objects_type: (num_center_objects)
                 center_objects_id: (num_center_objects)
