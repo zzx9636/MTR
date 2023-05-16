@@ -25,6 +25,7 @@ class WaymoDataset(DatasetTemplate):
         self.logger.info(f'Total scenes after filters: {len(self.infos)}')
 
     def get_all_infos(self, info_path):
+
         self.logger.info(f'Start to load infos from {info_path}')
         with open(info_path, 'rb') as f:
             src_infos = pickle.load(f)

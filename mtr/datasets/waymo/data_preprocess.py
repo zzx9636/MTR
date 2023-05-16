@@ -5,6 +5,8 @@
 
 
 import sys, os
+os.environ["CUDA_VISIBLE_DEVICES"]="-1"  # disable GPU
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import numpy as np
 import pickle
 import tensorflow as tf
@@ -131,8 +133,9 @@ def decode_map_features_from_proto(map_features):
             map_infos['speed_bump'].append(cur_info)
 
         else:
-            print(cur_data)
-            raise ValueError
+            continue
+            # print(cur_data)
+            # raise ValueError
 
         polylines.append(cur_polyline)
         cur_info['polyline_index'] = (point_cnt, point_cnt + len(cur_polyline))
@@ -229,29 +232,44 @@ def get_infos_from_protos(data_path, output_path=None, num_workers=8):
 
 
 def create_infos_from_protos(raw_data_path, output_path, num_workers=16):
-    train_infos = get_infos_from_protos(
-        data_path=os.path.join(raw_data_path, 'training'),
-        output_path=os.path.join(output_path, 'processed_scenarios_training'),
-        num_workers=num_workers
-    )
-    train_filename = os.path.join(output_path, 'processed_scenarios_training_infos.pkl')
-    with open(train_filename, 'wb') as f:
-        pickle.dump(train_infos, f)
-    print('----------------Waymo info train file is saved to %s----------------' % train_filename)
+    # train_infos = get_infos_from_protos(
+    #     data_path=os.path.join(raw_data_path, 'training'),
+    #     output_path=os.path.join(output_path, 'processed_scenarios_training'),
+    #     num_workers=num_workers
+    # )
+    # train_filename = os.path.join(output_path, 'processed_scenarios_training_infos.pkl')
+    # with open(train_filename, 'wb') as f:
+    #     pickle.dump(train_infos, f)
+    # print('----------------Waymo info train file is saved to %s----------------' % train_filename)
 
-    val_infos = get_infos_from_protos(
-        data_path=os.path.join(raw_data_path, 'validation'),
-        output_path=os.path.join(output_path, 'processed_scenarios_validation'),
+    # val_infos = get_infos_from_protos(
+    #     data_path=os.path.join(raw_data_path, 'validation'),
+    #     output_path=os.path.join(output_path, 'processed_scenarios_validation'),
+    #     num_workers=num_workers
+    # )
+    # val_filename = os.path.join(output_path, 'processed_scenarios_val_infos.pkl')
+    # with open(val_filename, 'wb') as f:
+    #     pickle.dump(val_infos, f)
+    # print('----------------Waymo info val file is saved to %s----------------' % val_filename)
+    
+    val_interactive_infos = get_infos_from_protos(
+        data_path=os.path.join(raw_data_path, 'validation_interactive'),
+        output_path=os.path.join(output_path, 'processed_scenarios_validation_interactive'),
         num_workers=num_workers
     )
-    val_filename = os.path.join(output_path, 'processed_scenarios_val_infos.pkl')
-    with open(val_filename, 'wb') as f:
-        pickle.dump(val_infos, f)
-    print('----------------Waymo info val file is saved to %s----------------' % val_filename)
+    val_interactive_filename = os.path.join(output_path, 'processed_scenarios_val_interactive_infos.pkl')
+    with open(val_interactive_filename, 'wb') as f:
+        pickle.dump(val_interactive_infos, f)
+    print('----------------Waymo info val interactive file is saved to %s----------------' % val_interactive_filename)
     
 
 if __name__ == '__main__':
+    # create_infos_from_protos(
+    #     raw_data_path=sys.argv[1],
+    #     output_path=sys.argv[2]
+    # )
     create_infos_from_protos(
-        raw_data_path=sys.argv[1],
-        output_path=sys.argv[2]
+        raw_data_path='/home/zixu/Data/Dataset/Waymo/motion_v1_2',
+        output_path='/home/zixu/Data/Dataset/MTR_dataset'
     )
+

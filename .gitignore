@@ -11,3 +11,4 @@ data/
 *.yaml
 *.png
 *.html
+*.pth
