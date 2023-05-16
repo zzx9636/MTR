@@ -134,7 +134,7 @@ object_config = {
     },
     'TYPE_VEHICLE': {
         'facecolor': 'xkcd:blue',
-        'linewidth': 2,
+        'linewidth': 4,
         'linestyle': '-',
         'alpha': 0.5
     },
@@ -146,13 +146,13 @@ object_config = {
     },
     'TYPE_CYCLIST': {
         'facecolor': 'xkcd:yellow',
-        'linewidth': 2,
+        'linewidth': 3,
         'linestyle': '-',
         'alpha': 0.5
     },
     'TYPE_OTHER': {
         'facecolor': 'xkcd:black',
-        'linewidth': 2,
+        'linewidth': 1,
         'linestyle': '-',
         'alpha': 0.5
     },

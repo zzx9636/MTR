@@ -11,7 +11,7 @@ from .vis_config_bright import canvas_config, road_line_config, road_edge_config
     crosswalk_config, lane_config, stop_sign_config, object_config, signal_config, driveway_config
 from core.utils import PyLaneletMap
 
-v_max = 40
+v_max = 10
 v_min = 0
 
 
@@ -377,7 +377,7 @@ def plot_traj_with_time(
         lc.set_linewidth(linewidth)
         line = ax.add_collection(lc)
 
-    fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
+    # fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
 
 
 def plot_obj_pose(

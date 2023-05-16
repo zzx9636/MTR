@@ -242,25 +242,25 @@ def create_infos_from_protos(raw_data_path, output_path, num_workers=16):
     #     pickle.dump(train_infos, f)
     # print('----------------Waymo info train file is saved to %s----------------' % train_filename)
 
-    # val_infos = get_infos_from_protos(
-    #     data_path=os.path.join(raw_data_path, 'validation'),
-    #     output_path=os.path.join(output_path, 'processed_scenarios_validation'),
-    #     num_workers=num_workers
-    # )
-    # val_filename = os.path.join(output_path, 'processed_scenarios_val_infos.pkl')
-    # with open(val_filename, 'wb') as f:
-    #     pickle.dump(val_infos, f)
-    # print('----------------Waymo info val file is saved to %s----------------' % val_filename)
-    
-    val_interactive_infos = get_infos_from_protos(
-        data_path=os.path.join(raw_data_path, 'validation_interactive'),
-        output_path=os.path.join(output_path, 'processed_scenarios_validation_interactive'),
+    val_infos = get_infos_from_protos(
+        data_path=os.path.join(raw_data_path, 'validation'),
+        output_path=os.path.join(output_path, 'processed_scenarios_validation'),
         num_workers=num_workers
     )
-    val_interactive_filename = os.path.join(output_path, 'processed_scenarios_val_interactive_infos.pkl')
-    with open(val_interactive_filename, 'wb') as f:
-        pickle.dump(val_interactive_infos, f)
-    print('----------------Waymo info val interactive file is saved to %s----------------' % val_interactive_filename)
+    val_filename = os.path.join(output_path, 'processed_scenarios_val_infos.pkl')
+    with open(val_filename, 'wb') as f:
+        pickle.dump(val_infos, f)
+    print('----------------Waymo info val file is saved to %s----------------' % val_filename)
+    
+    # val_interactive_infos = get_infos_from_protos(
+    #     data_path=os.path.join(raw_data_path, 'validation_interactive'),
+    #     output_path=os.path.join(output_path, 'processed_scenarios_validation_interactive'),
+    #     num_workers=num_workers
+    # )
+    # val_interactive_filename = os.path.join(output_path, 'processed_scenarios_val_interactive_infos.pkl')
+    # with open(val_interactive_filename, 'wb') as f:
+    #     pickle.dump(val_interactive_infos, f)
+    # print('----------------Waymo info val interactive file is saved to %s----------------' % val_interactive_filename)
     
 
 if __name__ == '__main__':
@@ -269,7 +269,8 @@ if __name__ == '__main__':
     #     output_path=sys.argv[2]
     # )
     create_infos_from_protos(
-        raw_data_path='/home/zixu/Data/Dataset/Waymo/motion_v1_2',
-        output_path='/home/zixu/Data/Dataset/MTR_dataset'
+        raw_data_path='/Data/Dataset/Waymo/V1_2',
+        output_path='/Data/Dataset/MTR',
+        num_workers=4
     )
 

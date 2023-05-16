@@ -22,16 +22,18 @@ class WaymoDataset(DatasetTemplate):
         self.data_path = self.data_root / self.dataset_cfg.SPLIT_DIR[self.mode]
 
         self.infos = self.get_all_infos(self.data_root / self.dataset_cfg.INFO_FILE[self.mode])
-        self.logger.info(f'Total scenes after filters: {len(self.infos)}')
+        if self.logger is not None:
+            self.logger.info(f'Total scenes after filters: {len(self.infos)}')
 
     def get_all_infos(self, info_path):
-
-        self.logger.info(f'Start to load infos from {info_path}')
+        if self.logger is not None:
+            self.logger.info(f'Start to load infos from {info_path}')
         with open(info_path, 'rb') as f:
             src_infos = pickle.load(f)
 
         infos = src_infos[::self.dataset_cfg.SAMPLE_INTERVAL[self.mode]]
-        self.logger.info(f'Total scenes before filters: {len(infos)}')
+        if self.logger is not None:
+            self.logger.info(f'Total scenes before filters: {len(infos)}')
 
         for func_name, val in self.dataset_cfg.INFO_FILTER_DICT.items():
             infos = getattr(self, func_name)(infos, val)
@@ -59,7 +61,8 @@ class WaymoDataset(DatasetTemplate):
             cur_info['tracks_to_predict']['difficulty'] = list(np.array(cur_info['tracks_to_predict']['difficulty'])[valid_mask])
 
             ret_infos.append(cur_info)
-        self.logger.info(f'Total scenes after filter_info_by_object_type: {len(ret_infos)}')
+        if self.logger is not None:
+            self.logger.info(f'Total scenes after filter_info_by_object_type: {len(ret_infos)}')
         return ret_infos
 
     def __len__(self):
@@ -77,7 +80,7 @@ class WaymoDataset(DatasetTemplate):
             info = pickle.load(f)
         return scene_id, info
 
-    def create_scene_level_data(self, index):
+    def create_scene_level_data(self, index, shift = 0):
         """
         Args:
             index (index):
@@ -85,10 +88,6 @@ class WaymoDataset(DatasetTemplate):
         Returns:
 
         """
-        # info = self.infos[index]
-        # scene_id = info['scenario_id']
-        # with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
-        #     info = pickle.load(f)
         scene_id, info = self.load_info(index)
 
         sdc_track_index = info['sdc_track_index']
@@ -101,14 +100,19 @@ class WaymoDataset(DatasetTemplate):
         obj_types = np.array(track_infos['object_type'])
         obj_ids = np.array(track_infos['object_id'])
         obj_trajs_full = track_infos['trajs']  # (num_objects, num_timestamp, 10)
+        if shift > 0:
+            obj_trajs_full_shift = np.zeros_like(obj_trajs_full)
+            obj_trajs_full_shift[:, :-shift,:] = obj_trajs_full[:, shift:,:]
+            obj_trajs_full = obj_trajs_full_shift
         obj_trajs_past = obj_trajs_full[:, :current_time_index + 1]
         obj_trajs_future = obj_trajs_full[:, current_time_index + 1:]
-
+        
+        # This function extract the current state of the objects that need to be 
+        # predicted from the all objects' trajectories
         center_objects, track_index_to_predict = self.get_interested_agents(
             track_index_to_predict=track_index_to_predict,
             obj_trajs_full=obj_trajs_full,
             current_time_index=current_time_index,
-            obj_types=obj_types, scene_id=scene_id
         )
 
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos, obj_trajs_future_state, obj_trajs_future_mask, center_gt_trajs,
@@ -209,14 +213,29 @@ class WaymoDataset(DatasetTemplate):
             obj_trajs_future_state, obj_trajs_future_mask, center_gt_trajs, center_gt_trajs_mask, center_gt_final_valid_idx,
             track_index_to_predict_new, sdc_track_index_new, obj_types, obj_ids)
 
-    def get_interested_agents(self, track_index_to_predict, obj_trajs_full, current_time_index, obj_types, scene_id):
+    def get_interested_agents(self, track_index_to_predict, obj_trajs_full, current_time_index):
+        '''
+        This function extract the current state of the objects that need to be predicted from the all objects' trajectories
+        Args:
+            track_index_to_predict (list[int]): the index of objects that need to be predicted
+            obj_trajs_full (num_objects, num_timestamps=91, 10): The full trajectory of all objects
+                [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
+            current_time_index (int): the current time index
+        Returns:
+            center_objects (num_center_objects, 10): the current state of the objects that need to be predicted
+                [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
+            track_index_to_predict (list[int]): the index of objects that need to be predicted
+        '''
         center_objects_list = []
         track_index_to_predict_selected = []
 
         for k in range(len(track_index_to_predict)):
             obj_idx = track_index_to_predict[k]
 
-            assert obj_trajs_full[obj_idx, current_time_index, -1] > 0, f'obj_idx={obj_idx}, scene_id={scene_id}'
+            # Make sure the current index is valid
+            if obj_trajs_full[obj_idx, current_time_index, -1] == 0:
+                continue
+            # assert obj_trajs_full[obj_idx, current_time_index, -1] > 0, f'obj_idx={obj_idx}, scene_id={scene_id}'
 
             center_objects_list.append(obj_trajs_full[obj_idx, current_time_index])
             track_index_to_predict_selected.append(obj_idx)
@@ -234,6 +253,8 @@ class WaymoDataset(DatasetTemplate):
             center_xyz (num_center_objects, 3 or 2): [x, y, z] or [x, y]
             center_heading (num_center_objects):
             heading_index: the index of heading angle in the num_attr-axis of obj_trajs
+        return:
+            obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
         """
         num_objects, num_timestamps, num_attrs = obj_trajs.shape
         num_center_objects = center_xyz.shape[0]
@@ -259,17 +280,20 @@ class WaymoDataset(DatasetTemplate):
 
         return obj_trajs
 
-    def generate_centered_trajs_for_agents(self, center_objects, obj_trajs_past, obj_types, center_indices, sdc_index, timestamps, obj_trajs_future):
-        """[summary]
-
+    def generate_centered_trajs_for_agents(
+        self, center_objects, obj_trajs_past, obj_trajs_future, obj_types, center_indices, sdc_index, timestamps):
+        """
+        This function create 'agent-centric' trajectories for each object around each center objects
         Args:
-            center_objects (num_center_objects, 10): [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
-            obj_trajs_past (num_objects, num_timestamps, 10): [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
-            obj_types (num_objects):
+            center_objects (num_center_objects, 10): the current states of objects that need to be predicted
+                [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid], 
+            obj_trajs_past (num_objects, num_timestamps, 10): the past trajectories of all objects
+            obj_trajs_future: (num_objects, num_future_timestamps, 10): the future trajectories of all objects
+            obj_types: List[str] (num_objects): the type of each object
             center_indices (num_center_objects): the index of center objects in obj_trajs_past
-            centered_valid_time_indices (num_center_objects), the last valid time index of center objects
-            timestamps ([type]): [description]
-            obj_trajs_future (num_objects, num_future_timestamps, 10): [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
+            sdc_index (int): the index of the self-driving car in obj_trajs_past
+            timestamps ([float]): list of timestamps for the past trajectories
+            
         Returns:
             ret_obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
             ret_obj_valid_mask (num_center_objects, num_objects, num_timestamps):
@@ -285,7 +309,8 @@ class WaymoDataset(DatasetTemplate):
         obj_trajs_past = torch.from_numpy(obj_trajs_past).float()
         timestamps = torch.from_numpy(timestamps)
 
-        # transform coordinates to the centered objects
+        # transform the coordinate systems to each centered objects
+        # [num_center_objects, num_objects, num_timestamps, num_attrs]
         obj_trajs = self.transform_trajs_to_center_coords(
             obj_trajs=obj_trajs_past,
             center_xyz=center_objects[:, 0:3],

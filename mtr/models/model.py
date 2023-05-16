@@ -66,20 +66,20 @@ class MotionTransformer(nn.Module):
 
         return it, epoch
 
-    def load_params_from_file(self, filename, logger, to_cpu=False):
+    def load_params_from_file(self, filename, logger = None, to_cpu=False):
         if not os.path.isfile(filename):
             raise FileNotFoundError
-
-        logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
+        if logger is not None:
+            logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
         checkpoint = torch.load(filename, map_location=loc_type)
         model_state_disk = checkpoint['model_state']
 
         version = checkpoint.get("version", None)
-        if version is not None:
+        if version is not None and logger is not None:
             logger.info('==> Checkpoint trained from version: %s' % version)
-
-        logger.info(f'The number of disk ckpt keys: {len(model_state_disk)}')
+        if logger is not None:
+            logger.info(f'The number of disk ckpt keys: {len(model_state_disk)}')
         model_state = self.state_dict()
         model_state_disk_filter = {}
         for key, val in model_state_disk.items():
@@ -94,11 +94,11 @@ class MotionTransformer(nn.Module):
         model_state_disk = model_state_disk_filter
 
         missing_keys, unexpected_keys = self.load_state_dict(model_state_disk, strict=False)
-
-        logger.info(f'Missing keys: {missing_keys}')
-        logger.info(f'The number of missing keys: {len(missing_keys)}')
-        logger.info(f'The number of unexpected keys: {len(unexpected_keys)}')
-        logger.info('==> Done (total keys %d)' % (len(model_state)))
+        if logger is not None:
+            logger.info(f'Missing keys: {missing_keys}')
+            logger.info(f'The number of missing keys: {len(missing_keys)}')
+            logger.info(f'The number of unexpected keys: {len(unexpected_keys)}')
+            logger.info('==> Done (total keys %d)' % (len(model_state)))
 
         epoch = checkpoint.get('epoch', -1)
         it = checkpoint.get('it', 0.0)
