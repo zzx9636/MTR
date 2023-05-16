@@ -45,8 +45,8 @@ class MotionTransformer(nn.Module):
     def load_params_with_optimizer(self, filename, to_cpu=False, optimizer=None, logger=None):
         if not os.path.isfile(filename):
             raise FileNotFoundError
-
-        logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
+        if logger is not None:
+            logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         loc_type = torch.device('cpu') if to_cpu else None
         checkpoint = torch.load(filename, map_location=loc_type)
         epoch = checkpoint.get('epoch', -1)
@@ -55,14 +55,16 @@ class MotionTransformer(nn.Module):
         self.load_state_dict(checkpoint['model_state'], strict=True)
 
         if optimizer is not None:
-            logger.info('==> Loading optimizer parameters from checkpoint %s to %s'
+            if logger is not None:
+                logger.info('==> Loading optimizer parameters from checkpoint %s to %s'
                         % (filename, 'CPU' if to_cpu else 'GPU'))
             optimizer.load_state_dict(checkpoint['optimizer_state'])
 
         if 'version' in checkpoint:
             print('==> Checkpoint trained from version: %s' % checkpoint['version'])
         # logger.info('==> Done')
-        logger.info('==> Done (loaded %d/%d)' % (len(checkpoint['model_state']), len(checkpoint['model_state'])))
+        if logger is not None:
+            logger.info('==> Done (loaded %d/%d)' % (len(checkpoint['model_state']), len(checkpoint['model_state'])))
 
         return it, epoch
 
