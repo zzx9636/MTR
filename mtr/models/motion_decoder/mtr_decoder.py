@@ -154,7 +154,7 @@ class MTRDecoder(nn.Module):
         obj_feature_valid = obj_feature[obj_mask]
         obj_pos_feature_valid = self.obj_pos_encoding_layer(obj_pos_valid)
         obj_fused_feature_valid = torch.cat((obj_pos_feature_valid, obj_feature_valid), dim=-1)
-
+        
         pred_dense_trajs_valid = self.dense_future_head(obj_fused_feature_valid)
         pred_dense_trajs_valid = pred_dense_trajs_valid.view(pred_dense_trajs_valid.shape[0], self.num_future_frames, 7)
 
@@ -507,13 +507,15 @@ class MTRDecoder(nn.Module):
 
     def forward(self, batch_dict):
         input_dict = batch_dict['input_dict']
+        # Aggregate features over the history 
         obj_feature, obj_mask, obj_pos = batch_dict['obj_feature'], batch_dict['obj_mask'], batch_dict['obj_pos']
         map_feature, map_mask, map_pos = batch_dict['map_feature'], batch_dict['map_mask'], batch_dict['map_pos']
         center_objects_feature = batch_dict['center_objects_feature']
         num_center_objects, num_objects, _ = obj_feature.shape
         num_polylines = map_feature.shape[1]
-
-        # input projection
+        
+        # input projection 
+        # project each feature to a higher dimension
         center_objects_feature = self.in_proj_center_obj(center_objects_feature)
         obj_feature_valid = self.in_proj_obj(obj_feature[obj_mask])
         obj_feature = obj_feature.new_zeros(num_center_objects, num_objects, obj_feature_valid.shape[-1])
@@ -522,11 +524,14 @@ class MTRDecoder(nn.Module):
         map_feature_valid = self.in_proj_map(map_feature[map_mask])
         map_feature = map_feature.new_zeros(num_center_objects, num_polylines, map_feature_valid.shape[-1])
         map_feature[map_mask] = map_feature_valid
-
-        # dense future prediction
+        
+        # dense future prediction 
+        # This predict future trajectory for each objects in the scene
+        # Then the future trajectory of each object is encoded into a latent feature
         obj_feature, pred_dense_future_trajs = self.apply_dense_future_prediction(
             obj_feature=obj_feature, obj_mask=obj_mask, obj_pos=obj_pos
         )
+                
         # decoder layers
         pred_list = self.apply_transformer_decoder(
             center_objects_feature=center_objects_feature,
