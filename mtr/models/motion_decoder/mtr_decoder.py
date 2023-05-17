@@ -196,14 +196,15 @@ class MTRDecoder(nn.Module):
                               query_content_pre_mlp=None, query_embed_pre_mlp=None):
         """
         Args:
-            kv_feature (B, N, C):
-            kv_mask (B, N):
-            kv_pos (B, N, 3):
-            query_tgt (M, B, C):
+            kv_feature (B, N, C): Key and Value feature
+            kv_mask (B, N): Key and Value mask
+            kv_pos (B, N, 3): Ego centric x-y position of Key and Value. This is used for positional encoding.
+            query_content (M, B, C):
             query_embed (M, B, C):
-            dynamic_query_center (M, B, 2): . Defaults to None.
-            attention_layer (layer):
-
+            attention_layer (layer): nn.Module Attention layer to be used.
+            dynamic_query_center (M, B, 2): . Ego centric x-y position of query center. This is used for positional encoding.
+            layer_idx: int. Defaults to 0.
+            use_local_attn (bool): Whether to use local attention. Defaults to False.
             query_index_pair (B, M, K)
 
         Returns:
@@ -292,6 +293,8 @@ class MTRDecoder(nn.Module):
         return sorted_idxs.int(), base_map_idxs
 
     def apply_transformer_decoder(self, center_objects_feature, center_objects_type, obj_feature, obj_mask, obj_pos, map_feature, map_mask, map_pos):
+        # Encoded and raw position of intention points
+        # ! TODO, use our own intention points
         intention_query, intention_points = self.get_motion_query(center_objects_type)
         query_content = torch.zeros_like(intention_query)
         self.forward_ret_dict['intention_points'] = intention_points.permute(1, 0, 2)  # (num_center_objects, num_query, 2)
@@ -307,6 +310,7 @@ class MTRDecoder(nn.Module):
 
         pred_list = []
         for layer_idx in range(self.num_decoder_layers):
+            # ! Why initial query_content is all zeros?
             # query object feature
             obj_query_feature = self.apply_cross_attention(
                 kv_feature=obj_feature, kv_mask=obj_mask, kv_pos=obj_pos,
