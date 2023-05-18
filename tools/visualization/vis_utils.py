@@ -334,7 +334,7 @@ def plot_traj_with_speed(
         lc.set_linewidth(linewidth)
         line = ax.add_collection(lc)
 
-    fig.colorbar(line, ax=ax, label='speed (m/s)', location='right', shrink=0.3, pad=0.02)
+    # fig.colorbar(line, ax=ax, label='speed (m/s)', location='right', shrink=0.3, pad=0.02)
 
 
 def plot_traj_with_time(

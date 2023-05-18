@@ -543,7 +543,8 @@ class MTRDecoder(nn.Module):
             obj_feature=obj_feature, obj_mask=obj_mask, obj_pos=obj_pos,
             map_feature=map_feature, map_mask=map_mask, map_pos=map_pos
         )
-
+        # Generate 7D trajectory 
+        # [x, y, sigma_x, sigma_y, rho, v_x, v_y]
         self.forward_ret_dict['pred_list'] = pred_list
 
         if not self.training:

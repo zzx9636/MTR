@@ -89,6 +89,9 @@ class WaymoDataset(DatasetTemplate):
 
         """
         scene_id, info = self.load_info(index)
+        return self.extract_scene_data(scene_id, info, shift)
+        
+    def extract_scene_data(self, scene_id, info, shift = 0):
 
         sdc_track_index = info['sdc_track_index']
         current_time_index = info['current_time_index']
@@ -514,18 +517,28 @@ class WaymoDataset(DatasetTemplate):
 
         num_center_objects, num_modes, num_timestamps, num_feat = pred_trajs.shape
         assert num_feat == 7
-
-        pred_trajs_world = common_utils.rotate_points_along_z(
-            points=pred_trajs.view(num_center_objects, num_modes * num_timestamps, num_feat),
+        
+        pred_trajs_xy = pred_trajs[:, :, :, 0:2].view(num_center_objects, num_modes * num_timestamps, 2)
+        pred_trajs_v = pred_trajs[:, :, :, 5:7].view(num_center_objects, num_modes * num_timestamps, 2)
+        
+        pred_trajs_xy = common_utils.rotate_points_along_z(
+            points=pred_trajs_xy,
             angle=center_objects_world[:, 6].view(num_center_objects)
-        ).view(num_center_objects, num_modes, num_timestamps, num_feat)
-        pred_trajs_world[:, :, :, 0:2] += center_objects_world[:, None, None, 0:2]
+        ).view(num_center_objects, num_modes, num_timestamps, 2)
+        pred_trajs_xy  = pred_trajs_xy+ center_objects_world[:, None, None, 0:2]
+        
+        pred_trajs_v = common_utils.rotate_points_along_z(
+            points=pred_trajs_v,
+            angle=center_objects_world[:, 6].view(num_center_objects)
+        ).view(num_center_objects, num_modes, num_timestamps, 2)
+        
+        pred_trajs_world = torch.cat([pred_trajs_xy, pred_trajs_v], dim=-1)        
 
         pred_dict_list = []
         for obj_idx in range(num_center_objects):
             single_pred_dict = {
                 'scenario_id': input_dict['scenario_id'][obj_idx],
-                'pred_trajs': pred_trajs_world[obj_idx, :, :, 0:2].cpu().numpy(),
+                'pred_trajs': pred_trajs_world[obj_idx, :, :].cpu().numpy(),
                 'pred_scores': pred_scores[obj_idx, :].cpu().numpy(),
                 'object_id': input_dict['center_objects_id'][obj_idx],
                 'object_type': input_dict['center_objects_type'][obj_idx],
