@@ -171,7 +171,7 @@ if __name__ == '__main__':
     
     for i in tqdm(range(len(mtr_inference.dataset))):
         try:
-            mtr_inference.generate_gif(i, 'gif')
+            mtr_inference.generate_gif(i, 'gif_interactive')
         except Exception as e:
             if e == KeyboardInterrupt:
                 raise e
