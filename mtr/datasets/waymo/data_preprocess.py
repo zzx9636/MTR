@@ -43,6 +43,65 @@ def get_polyline_dir(polyline):
     polyline_dir = diff / np.clip(np.linalg.norm(diff, axis=-1)[:, np.newaxis], a_min=1e-6, a_max=1000000000)
     return polyline_dir
 
+def decode_boundary_segment_from_proto(boundary_segment):
+    '''
+    This function decodes the boundary segment from the proto format to a list of dicts.
+    Boundary Segment is a segment of a lane with a given adjacent boundary
+    https://github.com/waymo-research/waymo-open-dataset/blob/1eabddad78858a74b18152f61b89868a6c4ecc59/src/waymo_open_dataset/protos/map.proto#L94
+    '''
+    boundary_segment_list = [
+        {
+            # The index into the lane's polyline where this lane boundary starts
+            'start_index': x.lane_start_index,
+            # The index into the lane's polyline where this lane boundary ends.
+            'end_index': x.lane_end_index,
+            # The **adjacent** boundary feature ID of the MapFeature for the boundary. This
+            # can either be a RoadLine feature or a RoadEdge feature.
+            'feature_id': x.boundary_feature_id,
+            # The adjacent boundary type. If the boundary is a road edge instead of a
+            # road line, this will be set to TYPE_UNKNOWN.
+            'boundary_type':
+                road_line_type[x.boundary_type]  # roadline type
+        } for x in boundary_segment
+    ]
+    return boundary_segment_list
+
+def decode_lane_neighbor_from_proto(lane_neighbor):
+    '''
+    This function decode a lane's neighbor information to a list of dicts.
+    https://github.com/waymo-research/waymo-open-dataset/blob/1eabddad78858a74b18152f61b89868a6c4ecc59/src/waymo_open_dataset/protos/map.proto#L111
+    '''
+    lane_neighbor_list = [
+        {
+            # The feature ID of the neighbor lane.
+            'feature_id': x.feature_id,
+            #  The self adjacency segment.
+            #  The other lane may only be a neighbor for only part of this lane. These
+            #  indices define the points within this lane's polyline for which feature_id
+            #  is a neighbor. If the lanes are neighbors at disjoint places (e.g., a
+            #  median between them appears and then goes away) multiple neighbors will be
+            #  listed. A lane change can only happen from this segment of this lane into
+            #  the segment of the neighbor lane defined by neighbor_start_index and
+            #  neighbor_end_index.
+            'self_start_index': x.self_start_index,
+            'self_end_index': x.self_end_index,
+            #  The neighbor adjacency segment.
+            #  These indices define the valid portion of the neighbor lane's polyline
+            #  where that lane is a neighbor to this lane. A lane change can only happen
+            #  into this segment of the neighbor lane from the segment of this lane
+            #  defined by self_start_index and self_end_index.
+            'neighbor_start_index': x.neighbor_start_index,
+            'neighbor_end_index': x.neighbor_end_index,
+            #  A list of segments within the self adjacency segment that have different
+            #  boundaries between this lane and the neighbor lane. Each entry in this
+            #  field contains the boundary type between this lane and the neighbor lane
+            #  along with the indices into this lane's polyline where the boundary type
+            #  begins and ends.
+            'boundaries': decode_boundary_segment_from_proto(x.boundaries),
+        } for x in lane_neighbor
+    ]
+    return lane_neighbor_list
+
 
 def decode_map_features_from_proto(map_features):
     map_infos = {
@@ -67,18 +126,11 @@ def decode_map_features_from_proto(map_features):
             cur_info['entry_lanes'] = list(cur_data.lane.entry_lanes)
             cur_info['exit_lanes'] = list(cur_data.lane.exit_lanes)
 
-            cur_info['left_boundary'] = [{
-                    'start_index': x.lane_start_index, 'end_index': x.lane_end_index,
-                    'feature_id': x.boundary_feature_id,
-                    'boundary_type': x.boundary_type  # roadline type
-                } for x in cur_data.lane.left_boundaries
-            ]
-            cur_info['right_boundary'] = [{
-                    'start_index': x.lane_start_index, 'end_index': x.lane_end_index,
-                    'feature_id': x.boundary_feature_id,
-                    'boundary_type': road_line_type[x.boundary_type]  # roadline type
-                } for x in cur_data.lane.right_boundaries
-            ]
+            cur_info['left_boundary'] = decode_boundary_segment_from_proto(cur_data.lane.left_boundaries)
+            cur_info['right_boundary'] = decode_boundary_segment_from_proto(cur_data.lane.right_boundaries)
+            
+            cur_info['left_neighbors'] = decode_lane_neighbor_from_proto(cur_data.lane.left_neighbors)
+            cur_info['right_neighbors'] = decode_lane_neighbor_from_proto(cur_data.lane.right_neighbors)
 
             global_type = polyline_type[cur_info['type']]
             cur_polyline = np.stack([np.array([point.x, point.y, point.z, global_type]) for point in cur_data.lane.polyline], axis=0)
