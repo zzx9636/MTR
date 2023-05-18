@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 from tqdm import tqdm
 
-from visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose, plot_traj_with_speed
+from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose, plot_traj_with_speed
 
 
 class MTRInference():
@@ -31,6 +31,9 @@ class MTRInference():
         
         self.model.eval()
         
+    def generate_info(self, index):
+        return self.dataset.load_info(index)
+    
     def generate_input_data(self, index: int, shift: int = 0, preprocess: Optional[Callable] = None)-> Dict:
         '''
         This function generates the input data for the model.
@@ -42,7 +45,7 @@ class MTRInference():
             data (dict): The input data for the model.
         '''
         # Load data from cache
-        scene_id, info = self.dataset.load_info(index)
+        scene_id, info = self.generate_info(index)
         
         # Extract data from scene
         data = self.dataset.extract_scene_data(scene_id, info, shift)
