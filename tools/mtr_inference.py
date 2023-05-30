@@ -5,6 +5,7 @@ from typing import List, Dict, Callable, Optional
 from mtr.config import cfg, cfg_from_yaml_file
 from mtr.models import model as model_utils
 from mtr.datasets.waymo.waymo_dataset import WaymoDataset
+from mtr.datasets.waymo.generate_graph import generate_map_graph
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 from tqdm import tqdm
@@ -33,6 +34,11 @@ class MTRInference():
         
     def generate_info(self, index):
         return self.dataset.load_info(index)
+    
+    def generate_graph(self, index: int):
+        scene_id, info = self.generate_info(index)
+        map_graph = generate_map_graph(info)
+        return scene_id, map_graph
     
     def generate_input_data(self, index: int, shift: int = 0, preprocess: Optional[Callable] = None)-> Dict:
         '''
@@ -79,7 +85,7 @@ class MTRInference():
     
     def plot_result(self, scene_id: str, info: dict, final_pred_dicts: dict, shift: int = 0, plot_gt: bool = False):
         # Visualize
-        fig, ax = plot_map(info['map_infos'], if_plot_lane=False)
+        fig, ax = plot_map(info['map_infos'], if_plot_lane=plot_lane, map_graph=map_graph)
 
         t = info['current_time_index'] + shift
         
