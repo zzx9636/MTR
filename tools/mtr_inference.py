@@ -59,7 +59,7 @@ class MTRInference():
         
         return scene_id, info, data_batch
         
-    def inference(self, batch_dict: Dict) -> List[Dict]:
+    def inference(self, batch_dict: Dict, generate_prediction: bool = True) -> List[Dict]:
         '''
         This function runs inference on the model.
         
@@ -68,25 +68,16 @@ class MTRInference():
         Returns:
             final_pred_dicts List(dict): The output of the model.
         '''
+        self.model.eval()
         with torch.no_grad():
             batch_pred_dicts = self.model(batch_dict)
+        if generate_prediction:
             final_pred_dicts = self.dataset.generate_prediction_dicts(batch_pred_dicts)
-            
-        return final_pred_dicts
+            return final_pred_dicts
+        else:
+            return batch_pred_dicts
     
-    
-    def visualize(self, scene_id: str, info: dict, shift: int = 0, plot_gt: bool = False):
-        '''
-        Get the input data, run inference, and visualize the results.
-        '''
-        data = self.dataset.extract_scene_data(scene_id, info, shift)
-        
-        # Make data in a batch with batch size 1
-        data_batch = self.dataset.collate_batch([data])
-        
-        # Run inference
-        final_pred_dicts = self.inference(data_batch)
-        
+    def plot_result(self, scene_id: str, info: dict, final_pred_dicts: dict, shift: int = 0, plot_gt: bool = False):
         # Visualize
         fig, ax = plot_map(info['map_infos'], if_plot_lane=False)
 
@@ -116,6 +107,23 @@ class MTRInference():
             plot_obj_pose(obj_type, traj[t-1], ax=ax)
             
         ax.set_title(f'Scene {scene_id} at {t/10} seconds')
+        return fig, ax
+        
+    
+    def visualize(self, scene_id: str, info: dict, shift: int = 0, plot_gt: bool = False):
+        '''
+        Get the input data, run inference, and visualize the results.
+        '''
+        data = self.dataset.extract_scene_data(scene_id, info, shift)
+        
+        # Make data in a batch with batch size 1
+        data_batch = self.dataset.collate_batch([data])
+        
+        # Run inference
+        final_pred_dicts = self.inference(data_batch)
+        
+        fig, ax = self.plot_result(scene_id, info, final_pred_dicts, shift, plot_gt)
+        
         return scene_id, fig, ax
     
     def generate_gif(self, index: int, outut_dir: str = '.'):

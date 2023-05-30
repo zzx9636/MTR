@@ -28,7 +28,7 @@ def setup_canvas():
         # Hide X and Y axes tick marks
         ax.set_xticks([])
         ax.set_yticks([])
-    plt.tight_layout(pad=0)
+    plt.tight_layout()#pad=0)
     return fig, ax
 
 
