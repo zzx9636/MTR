@@ -15,6 +15,7 @@ from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time,
 
 class MTRInference():
     def __init__(self, cfg_file: str, ckpt_path: str) -> None:
+        print("=========== MTR Inference ===========")
         self.cfg = cfg
         cfg_from_yaml_file(cfg_file, self.cfg)
     

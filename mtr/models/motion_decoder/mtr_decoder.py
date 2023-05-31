@@ -65,7 +65,7 @@ class MTRDecoder(nn.Module):
         )
 
         # define the motion query
-        _, _, self.intention_query_mlps = self.build_motion_query(
+        self.intention_points, _, self.intention_query_mlps = self.build_motion_query(
             self.d_model, use_place_holder=self.use_place_holder
         )
 
@@ -113,18 +113,18 @@ class MTRDecoder(nn.Module):
     def build_motion_query(self, d_model, use_place_holder=False):
         intention_points = intention_query = intention_query_mlps = None
 
-        # if use_place_holder:
-        #     raise NotImplementedError
-        # else:
-        #     intention_points_file = cfg.ROOT_DIR / self.model_cfg.INTENTION_POINTS_FILE
-        #     with open(intention_points_file, 'rb') as f:
-        #         intention_points_dict = pickle.load(f)
+        if use_place_holder:
+            raise NotImplementedError
+        else:
+            intention_points_file = cfg.ROOT_DIR / self.model_cfg.INTENTION_POINTS_FILE
+            with open(intention_points_file, 'rb') as f:
+                intention_points_dict = pickle.load(f)
 
-        #     intention_points = {}
-        #     for cur_type in self.object_type:
-        #         cur_intention_points = intention_points_dict[cur_type]
-        #         cur_intention_points = torch.from_numpy(cur_intention_points).float().view(-1, 2).cuda()
-        #         intention_points[cur_type] = cur_intention_points
+            intention_points = {}
+            for cur_type in self.object_type:
+                cur_intention_points = intention_points_dict[cur_type]
+                cur_intention_points = torch.from_numpy(cur_intention_points).float().view(-1, 2).cuda()
+                intention_points[cur_type] = cur_intention_points
 
         intention_query_mlps = common_layers.build_mlps(
             c_in=d_model, mlp_channels=[d_model, d_model], ret_before_act=True
@@ -183,7 +183,6 @@ class MTRDecoder(nn.Module):
             # # Original MTR
             intention_points = input_query.permute(1, 0, 2)  # (num_query, num_center_objects, 2)
         else:      
-            raise NotImplementedError       
             # # Original MTR
             intention_points = torch.stack([
                 self.intention_points[center_objects_type[obj_idx]]
@@ -501,7 +500,8 @@ class MTRDecoder(nn.Module):
         pred_scores = torch.softmax(pred_scores, dim=-1)  # (num_center_objects, num_query)
 
         num_center_objects, num_query, num_future_timestamps, num_feat = pred_trajs.shape
-        if self.num_motion_modes != num_query and num_query > self.num_motion_modes:
+        # Turn of NMS for now
+        if False: #self.num_motion_modes != num_query and num_query > self.num_motion_modes:
             # assert num_query > self.num_motion_modes
             pred_trajs_final, pred_scores_final, selected_idxs = motion_utils.batch_nms(
                 pred_trajs=pred_trajs, pred_scores=pred_scores,
@@ -511,9 +511,8 @@ class MTRDecoder(nn.Module):
         else:
             pred_trajs_final = pred_trajs
             pred_scores_final = pred_scores
-            selected_idxs = None
 
-        return pred_scores_final, pred_trajs_final, selected_idxs
+        return pred_scores_final, pred_trajs_final, 
 
     def forward(self, batch_dict):
         input_dict = batch_dict['input_dict']
@@ -558,10 +557,11 @@ class MTRDecoder(nn.Module):
         self.forward_ret_dict['pred_list'] = pred_list
 
         if not self.training:
-            pred_scores, pred_trajs, selected_idx = self.generate_final_prediction(pred_list=pred_list, batch_dict=batch_dict)
+            pred_scores, pred_trajs =\
+                self.generate_final_prediction(pred_list=pred_list, batch_dict=batch_dict)
+
             batch_dict['pred_scores'] = pred_scores
             batch_dict['pred_trajs'] = pred_trajs
-            batch_dict['selected_idx'] = selected_idx
 
         else:
             self.forward_ret_dict['center_gt_trajs'] = input_dict['center_gt_trajs']

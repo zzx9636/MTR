@@ -1,4 +1,4 @@
-canvas_config = {'width': 5, 'background_color': 'xkcd:white', 'tick_on': True}
+canvas_config = {'width': 10, 'background_color': 'xkcd:white', 'tick_on': True}
 
 road_line_config = {
     'TYPE_UNKNOWN': {

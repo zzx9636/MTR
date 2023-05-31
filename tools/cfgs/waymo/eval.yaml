@@ -57,7 +57,7 @@ MODEL:
         CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_FUTURE_FRAMES: 80
-        NUM_MOTION_MODES: 18
+        NUM_MOTION_MODES: 64
 
         INTENTION_POINTS_FILE: data/waymo/cluster_64_center_dict.pkl
 
@@ -76,7 +76,7 @@ MODEL:
             'vel': 0.5
         }
 
-        NMS_DIST_THRESH: 2.5
+        NMS_DIST_THRESH: 10
 
 
 OPTIMIZATION:
