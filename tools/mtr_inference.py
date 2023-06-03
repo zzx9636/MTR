@@ -86,7 +86,7 @@ class MTRInference():
     
     def plot_result(self, scene_id: str, info: dict, final_pred_dicts: dict, shift: int = 0, plot_gt: bool = False):
         # Visualize
-        fig, ax = plot_map(info['map_infos'], if_plot_lane=plot_lane, map_graph=map_graph)
+        fig, ax = plot_map(info['map_infos'])
 
         t = info['current_time_index'] + shift
         

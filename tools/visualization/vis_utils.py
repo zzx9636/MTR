@@ -7,11 +7,11 @@ from matplotlib.patches import Polygon, RegularPolygon, Circle
 from matplotlib.collections import LineCollection
 import numpy as np
 from typing import Dict, List, Tuple
-from .vis_config_bright import canvas_config, road_line_config, road_edge_config, speed_bump_config, \
+from .vis_config_bright_hd import canvas_config, road_line_config, road_edge_config, speed_bump_config, \
     crosswalk_config, lane_config, stop_sign_config, object_config, signal_config, driveway_config
 from core.utils import PyLaneletMap
 
-v_max = 10
+v_max = 15
 v_min = 0
 
 
@@ -157,6 +157,8 @@ def plot_speed_bump(
     edgecolor: str = None,
     alpha: float = None,
 ):
+    return None
+
     if ax is None:
         ax = plt.gca()
     # override default config
@@ -303,6 +305,7 @@ def plot_traj_with_speed(
     linewidth: float = None,
     linestyle: str = None,
     alpha: float = None,
+    show_colorbar: bool = False,
 ):
     '''
     This function plot trajectory with speed as color gradient
@@ -333,8 +336,8 @@ def plot_traj_with_speed(
         lc.set_array(speed)
         lc.set_linewidth(linewidth)
         line = ax.add_collection(lc)
-
-    # fig.colorbar(line, ax=ax, label='speed (m/s)', location='right', shrink=0.3, pad=0.02)
+    if show_colorbar:
+        fig.colorbar(line, ax=ax, label='speed (m/s)', location='right', shrink=0.3, pad=0.02)
 
 
 def plot_traj_with_time(
