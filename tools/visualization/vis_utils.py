@@ -11,7 +11,7 @@ from .vis_config_bright_hd import canvas_config, road_line_config, road_edge_con
     crosswalk_config, lane_config, stop_sign_config, object_config, signal_config, driveway_config
 from core.utils import PyLaneletMap
 
-v_max = 15
+v_max = 10
 v_min = 0
 
 
