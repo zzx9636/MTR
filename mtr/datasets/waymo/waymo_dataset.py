@@ -103,11 +103,14 @@ class WaymoDataset(DatasetTemplate):
         obj_types = np.array(track_infos['object_type'])
         obj_ids = np.array(track_infos['object_id'])
         obj_trajs_full = track_infos['trajs']  # (num_objects, num_timestamp, 10)
+        # Add random noise to the object trajectories
+        # obj_trajs_full[:, :, 0:3] += np.random.randn(*obj_trajs_full[:, :, 0:3].shape)*0.1
         if shift > 0:
             obj_trajs_full_shift = np.zeros_like(obj_trajs_full)
             obj_trajs_full_shift[:, :-shift,:] = obj_trajs_full[:, shift:,:]
             obj_trajs_full = obj_trajs_full_shift
         obj_trajs_past = obj_trajs_full[:, :current_time_index + 1]
+        
         obj_trajs_future = obj_trajs_full[:, current_time_index + 1:]
         
         # This function extract the current state of the objects that need to be 

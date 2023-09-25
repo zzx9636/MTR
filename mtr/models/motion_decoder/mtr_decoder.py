@@ -501,7 +501,7 @@ class MTRDecoder(nn.Module):
 
         num_center_objects, num_query, num_future_timestamps, num_feat = pred_trajs.shape
         # Turn of NMS for now
-        if False: #self.num_motion_modes != num_query and num_query > self.num_motion_modes:
+        if self.num_motion_modes != num_query and num_query > self.num_motion_modes:
             # assert num_query > self.num_motion_modes
             pred_trajs_final, pred_scores_final, selected_idxs = motion_utils.batch_nms(
                 pred_trajs=pred_trajs, pred_scores=pred_scores,
@@ -524,6 +524,7 @@ class MTRDecoder(nn.Module):
         map_feature, map_mask, map_pos = batch_dict['map_feature'], batch_dict['map_mask'], batch_dict['map_pos']
         center_objects_feature = batch_dict['center_objects_feature']
         num_center_objects, num_objects, _ = obj_feature.shape
+        print(f"num_center_objects: {num_center_objects}, num_objects: {num_objects}")
         num_polylines = map_feature.shape[1]
         
         # input projection 

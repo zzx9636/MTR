@@ -4,13 +4,13 @@ DATA_CONFIG:
     
     DATA_ROOT: '/Data/Dataset/MTR'
     SPLIT_DIR: {
-        'test': 'processed_scenarios_validation_interactive'
-        # 'test': 'processed_scenarios_validation'
+        # 'test': 'processed_scenarios_validation_interactive'
+        'test': 'processed_scenarios_validation'
     }
 
     INFO_FILE: {
-        'test': 'processed_scenarios_val_interactive_infos.pkl'
-        # 'test': 'processed_scenarios_val_infos.pkl'
+        # 'test': 'processed_scenarios_val_interactive_infos.pkl'
+        'test': 'processed_scenarios_val_infos.pkl'
     }
 
     SAMPLE_INTERVAL: {
@@ -57,7 +57,7 @@ MODEL:
         CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_FUTURE_FRAMES: 80
-        NUM_MOTION_MODES: 64
+        NUM_MOTION_MODES: 3
 
         INTENTION_POINTS_FILE: data/waymo/cluster_64_center_dict.pkl
 
@@ -76,7 +76,7 @@ MODEL:
             'vel': 0.5
         }
 
-        NMS_DIST_THRESH: 10
+        NMS_DIST_THRESH: 2.5
 
 
 OPTIMIZATION:

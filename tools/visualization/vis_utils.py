@@ -7,7 +7,7 @@ from matplotlib.patches import Polygon, RegularPolygon, Circle
 from matplotlib.collections import LineCollection
 import numpy as np
 from typing import Dict, List, Tuple
-from .vis_config_bright_hd import canvas_config, road_line_config, road_edge_config, speed_bump_config, \
+from .vis_config_bright import canvas_config, road_line_config, road_edge_config, speed_bump_config, \
     crosswalk_config, lane_config, stop_sign_config, object_config, signal_config, driveway_config
 from core.utils import PyLaneletMap
 
@@ -538,7 +538,7 @@ def plot_map_from_graph(map_graph: PyLaneletMap, map_infos: Dict, if_plot_lane=F
 
     return fig, ax
 
-def plot_map(map_infos: Dict, if_plot_lane=True, map_graph = None, fig = None, ax = None):
+def plot_map(map_infos: Dict, if_plot_lane=False, map_graph = None, fig = None, ax = None):
     polylines = map_infos['all_polylines']
     if fig is None or ax is None:
         fig, ax = setup_canvas()
