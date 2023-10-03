@@ -14,3 +14,4 @@ data/
 *.pth
 *.gif
 *.zip
+wandb/

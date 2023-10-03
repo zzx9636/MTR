@@ -11,7 +11,7 @@ import imageio.v2 as imageio
 from tqdm import tqdm
 
 from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose, plot_traj_with_speed
-
+from .mtr_lightning import MTR_Lightning, PrintLogger 
 
 class MTRInference():
     def __init__(self, cfg_file: str, ckpt_path: str) -> None:
@@ -23,15 +23,17 @@ class MTRInference():
         self.dataset = WaymoDataset(self.cfg.DATA_CONFIG, training=False, logger=None)
         
         ### Build Model ###
-        self.model = model_utils.MotionTransformer(config=cfg.MODEL)
+        # self.model = model_utils.MotionTransformer(config=cfg.MODEL)
+        self.model = MTR_Lightning(cfg)
+        self.model = self.model.load_from_checkpoint(ckpt_path)
         
         ### Load Checkpoint ###
-        _ = self.model.load_params_from_file(filename=ckpt_path, to_cpu=False)
+        # _ = self.model.load_params_from_file(filename=ckpt_path, to_cpu=False)
         
-        if torch.cuda.is_available():
-            self.model = self.model.cuda()
+        # if torch.cuda.is_available():
+        #     self.model = self.model.cuda()
         
-        self.model.eval()
+        # self.model.eval()
         
     def generate_info(self, index):
         return self.dataset.load_info(index)
@@ -78,6 +80,7 @@ class MTRInference():
         self.model.eval()
         with torch.no_grad():
             batch_pred_dicts = self.model(batch_dict)
+            print(batch_pred_dicts['pred_ctrl'])
         if generate_prediction:
             final_pred_dicts = self.dataset.generate_prediction_dicts(batch_pred_dicts)
             return final_pred_dicts

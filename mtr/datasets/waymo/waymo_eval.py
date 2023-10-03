@@ -6,6 +6,7 @@
 
 import numpy as np
 import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
 import os
 
 from google.protobuf import text_format

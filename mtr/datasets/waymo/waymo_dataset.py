@@ -20,7 +20,7 @@ class WaymoDataset(DatasetTemplate):
         super().__init__(dataset_cfg=dataset_cfg, training=training, logger=logger)
         self.data_root = cfg.ROOT_DIR / self.dataset_cfg.DATA_ROOT
         self.data_path = self.data_root / self.dataset_cfg.SPLIT_DIR[self.mode]
-
+        self.shfit_time = getattr(self.dataset_cfg, 'SHIFT_TIME', False)
         self.infos = self.get_all_infos(self.data_root / self.dataset_cfg.INFO_FILE[self.mode])
         if self.logger is not None:
             self.logger.info(f'Total scenes after filters: {len(self.infos)}')
@@ -69,7 +69,11 @@ class WaymoDataset(DatasetTemplate):
         return len(self.infos)
 
     def __getitem__(self, index):
-        ret_infos = self.create_scene_level_data(index)
+        if self.shfit_time:
+            shift = np.random.randint(0, 89)
+        else:
+            shift = 0
+        ret_infos = self.create_scene_level_data(index, shift=shift)
 
         return ret_infos
     
@@ -303,7 +307,7 @@ class WaymoDataset(DatasetTemplate):
         Returns:
             ret_obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
             ret_obj_valid_mask (num_center_objects, num_objects, num_timestamps):
-            ret_obj_trajs_future (num_center_objects, num_objects, num_timestamps_future, 4):  [x, y, vx, vy]
+            ret_obj_trajs_future (num_center_objects, num_objects, num_timestamps_future, 5):  [x, y, vx, vy, heading]
             ret_obj_valid_mask_future (num_center_objects, num_objects, num_timestamps_future):
         """
         assert obj_trajs_past.shape[-1] == 10
@@ -365,7 +369,7 @@ class WaymoDataset(DatasetTemplate):
             center_heading=center_objects[:, 6],
             heading_index=6, rot_vel_index=[7, 8]
         )
-        ret_obj_trajs_future = obj_trajs_future[:, :, :, [0, 1, 7, 8]]  # (x, y, vx, vy)
+        ret_obj_trajs_future = obj_trajs_future[:, :, :, [0, 1, 7, 8, 6]]  # (x, y, vx, vy, heading)
         ret_obj_valid_mask_future = obj_trajs_future[:, :, :, -1]  # (num_center_obejcts, num_objects, num_timestamps_future)  # TODO: CHECK THIS, 20220322
         ret_obj_trajs_future[ret_obj_valid_mask_future == 0] = 0
 
