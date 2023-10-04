@@ -99,7 +99,8 @@ class MTRInference():
             pred_trajs = prediction['pred_trajs']
             pred_scores = prediction['pred_scores']
             for future, score in zip(pred_trajs, pred_scores):
-                ax.plot(future[:, 0], future[:, 1], color='xkcd:russet', linewidth=2, linestyle='-', alpha=score*0.7+0.3, zorder=2)
+                if score > 0.1:
+                    ax.plot(future[:, 0], future[:, 1], color='xkcd:russet', linewidth=2, linestyle='-', alpha=score*0.7+0.3, zorder=2)
         
         for obj_idx in info['tracks_to_predict']['track_index']:
             plot_traj_with_speed([track_infos['object_type'][obj_idx]], [track_infos['trajs'][obj_idx][:t]], ax=ax, fig=fig,)

@@ -1,4 +1,4 @@
-canvas_config = {'width': 10, 'background_color': 'xkcd:white', 'tick_on': True}
+canvas_config = {'width': 4, 'background_color': 'xkcd:white', 'tick_on': False}
 
 road_line_config = {
     'TYPE_UNKNOWN': {
@@ -72,7 +72,7 @@ road_edge_config = {
     },
     'TYPE_ROAD_EDGE_MEDIAN': {
         'color': 'xkcd:sage',
-        'linewidth': 3.5,
+        'linewidth': 3,
         'linestyle': '-',
         'alpha': 1
     }
@@ -108,13 +108,13 @@ lane_config = {
 speed_bump_config = {
     'facecolor': 'xkcd:goldenrod',
     'edgecolor': 'xkcd:black',
-    'alpha': 1,
+    'alpha': 0,
 }
 
 crosswalk_config = {
     'facecolor': 'None',
     'edgecolor': 'xkcd:bluish grey',
-    'alpha': 0.4,
+    'alpha': 0.5,
 }
 
 stop_sign_config = {

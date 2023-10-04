@@ -19,7 +19,7 @@ def setup_canvas():
     fig = plt.figure(figsize=(canvas_config['width'], canvas_config['width']))
     ax = fig.add_subplot(111)
     ax.set_facecolor(canvas_config['background_color'])
-    ax.set_aspect('equal')
+    # ax.set_aspect('equal')
     if not canvas_config['tick_on']:
         # Hide X and Y axes label marks
         ax.xaxis.set_tick_params(labeltop=False)
@@ -28,7 +28,7 @@ def setup_canvas():
         # Hide X and Y axes tick marks
         ax.set_xticks([])
         ax.set_yticks([])
-    plt.tight_layout()#pad=0)
+    # plt.tight_layout(pad=0)
     return fig, ax
 
 
@@ -103,6 +103,8 @@ def plot_road_line(
     polylines_start, polylines_end = road_line['polyline_index']
     points = polylines[polylines_start:polylines_end, :2]
     
+    # if polylines[polylines_start:polylines_end, 2].max() < 166:
+    #     return
     if 'BROKEN' in line_type:
         _plot_broken_line(
             points=points,
@@ -137,7 +139,8 @@ def plot_road_edge(
     config = road_edge_config[road_edge['type']]
     polylines_start, polylines_end = road_edge['polyline_index']
     points = polylines[polylines_start:polylines_end, :2]
-
+    # if polylines[polylines_start:polylines_end, 2].max() < 166:
+    #     return
     _plot_line(
         points=points,
         config=config,
@@ -157,7 +160,6 @@ def plot_speed_bump(
     edgecolor: str = None,
     alpha: float = None,
 ):
-    return None
 
     if ax is None:
         ax = plt.gca()
@@ -198,16 +200,27 @@ def plot_crosswalk(
     alpha = crosswalk_config['alpha'] if alpha is None else alpha
 
     polylines_start, polylines_end = crosswalk['polyline_index']
-    points = polylines[polylines_start:polylines_end, :2]
+    points = np.copy(polylines[polylines_start:polylines_end, :2])
+    
+    # hack
+    dx = np.max(points[:, 0]) - np.min(points[:, 0])
+    dy = np.max(points[:, 1]) - np.min(points[:, 1])
+    
+    if dx > dy:
+        hatch = r'|'
+        points[:,0] = 0.65*points[:,0]
+    else:
+        hatch = r'-'
+        points[:,1] = 0.7*points[:,1]-5
 
     p = Polygon(
         points,
         facecolor=facecolor,
         edgecolor=edgecolor,
-        linewidth=2,
+        linewidth=0,
         alpha=alpha,
-        hatch=r'//',
-        zorder=2,
+        hatch=hatch,
+        zorder=1,
     )
 
     ax.add_patch(p)
@@ -538,7 +551,7 @@ def plot_map_from_graph(map_graph: PyLaneletMap, map_infos: Dict, if_plot_lane=F
 
     return fig, ax
 
-def plot_map(map_infos: Dict, if_plot_lane=True, map_graph = None, fig = None, ax = None):
+def plot_map(map_infos: Dict, if_plot_lane=False, map_graph = None, fig = None, ax = None):
     polylines = map_infos['all_polylines']
     if fig is None or ax is None:
         fig, ax = setup_canvas()
