@@ -112,9 +112,8 @@ class MTR_Lightning(pl.LightningModule):
         log_dict = {f'val/{k}': v for k, v in tb_dict.items()}
         self.log_dict(log_dict, on_step=False, prog_bar=True, logger=True)
         
-    def forward(self, batch):
-        _, _, batch_dict = self.model(batch)
-        return batch_dict
+    def forward(self, batch, get_loss: bool = False):
+        return self.model(batch, get_loss)
         
 # main function
 def train(cfg_file, pretrained_model, freeze_pretrained):

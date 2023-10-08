@@ -24,13 +24,15 @@ class MotionTransformer(nn.Module):
             config=self.model_cfg.MOTION_DECODER
         )
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict, get_loss=True):
         batch_dict = self.context_encoder(batch_dict)
         batch_dict = self.motion_decoder(batch_dict)
 
-        loss, tb_dict = self.get_loss()
-        
-        return loss, tb_dict, batch_dict
+        if get_loss:
+            loss, tb_dict = self.get_loss()
+            return loss, tb_dict, batch_dict
+        else:
+            return batch_dict
 
 
     def get_loss(self):

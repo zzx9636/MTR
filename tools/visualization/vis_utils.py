@@ -33,8 +33,13 @@ def setup_canvas():
 
 
 def _plot_line(
-    points: np.ndarray, config: Dict, ax: plt.Axes = None, color: str = None, linewidth: float = None,
-    linestyle: str = None, alpha: float = None
+    points: np.ndarray, 
+    config: Dict, 
+    ax: plt.Axes = None, 
+    color: str = None, 
+    linewidth: float = None,
+    linestyle: str = None, 
+    alpha: float = None
 ):
     if ax is None:
         ax = plt.gca()
@@ -265,16 +270,16 @@ def plot_lane(
         config=config,
         ax=ax,
         color=color,
-        linewidth=linewidth,
         linestyle=linestyle,
+        linewidth=linewidth,
         alpha=alpha,
     )
 
 
 def plot_driveway(
     driveway: Dict,
-    ax: plt.Axes = None,
     facecolor: str = None,
+    ax: plt.Axes = None,
     edgecolor: str = None,
     linewidth: float = None,
     alpha: float = None,
@@ -302,9 +307,9 @@ def plot_traj_with_speed(
     trajs: np.ndarray,
     fig: plt.Figure = None,
     ax: plt.Axes = None,
-    linewidth: float = None,
-    linestyle: str = None,
-    alpha: float = None,
+    fixed_linewidth: float = None,
+    fixed_linestyle: str = None,
+    fixed_alpha: float = None,
     show_colorbar: bool = False,
 ):
     '''
@@ -327,9 +332,9 @@ def plot_traj_with_speed(
         speed = np.linalg.norm(traj[val, -3:-1], axis=1)
 
         # override config
-        linewidth = config['linewidth'] if linewidth is None else linewidth
-        linestyle = config['linestyle'] if linestyle is None else linestyle
-        alpha = config['alpha'] if alpha is None else alpha
+        linewidth = config['linewidth'] if fixed_linewidth is None else fixed_linewidth
+        linestyle = config['linestyle'] if fixed_linestyle is None else fixed_linestyle
+        alpha = config['alpha'] if fixed_alpha is None else fixed_alpha
 
         lc = LineCollection(segments, cmap='viridis', norm=norm, linestyle=linestyle, alpha=alpha, zorder=3)
         # Set the values used for colormapping
@@ -346,9 +351,9 @@ def plot_traj_with_time(
     timestamps_seconds: list,
     fig: plt.Figure = None,
     ax: plt.Axes = None,
-    linewidth: float = None,
-    linestyle: str = None,
-    alpha: float = None,
+    fixed_linewidth: float = None,
+    fixed_linestyle: str = None,
+    fixed_alpha: float = None,
 ):
     '''
     This function plot trajectory with time as color gradient
@@ -360,7 +365,6 @@ def plot_traj_with_time(
 
     # plot color line
     norm = plt.Normalize(timestamps_seconds[0], timestamps_seconds[-1])
-
     # traj have feature [center_x, center_y, center_z, length, width, height, heading, velocity_x, velocity_y, valid]
     for obj_type, traj in zip(obj_type_list, trajs):
         config = object_config[obj_type]
@@ -368,19 +372,18 @@ def plot_traj_with_time(
         points = traj[val, :2].reshape(-1, 1, 2)  # (N, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)  # (N-1, 2, 2)
         valid_time = np.array(timestamps_seconds)[val]
-
+        
         # override config
-        linewidth = config['linewidth'] if linewidth is None else linewidth
-        linestyle = config['linestyle'] if linestyle is None else linestyle
-        alpha = config['alpha'] if alpha is None else alpha
-
+        linestyle = config['linestyle'] if fixed_linestyle is None else fixed_linestyle
+        linewidth = config['linewidth'] if fixed_linewidth is None else fixed_linewidth
+        alpha = config['alpha'] if fixed_alpha is None else fixed_alpha
         lc = LineCollection(segments, cmap='viridis', norm=norm, linestyle=linestyle, alpha=alpha, zorder=3)
         # Set the values used for colormapping
         lc.set_array(valid_time)
         lc.set_linewidth(linewidth)
         line = ax.add_collection(lc)
 
-    # fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
+    fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
 
 
 def plot_obj_pose(
@@ -439,6 +442,10 @@ def plot_signal(
 
     radius = signal_config['radius'] if radius is None else radius
     linewidth = signal_config['linewidth'] if linewidth is None else linewidth
+    max_t = len(dynamic_map_infos['state'])
+    if t >= max_t:
+        # Ignore invalid t
+        return
     
     states_list = dynamic_map_infos['state'][t]
     stop_points_list = dynamic_map_infos['stop_point'][t]

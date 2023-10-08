@@ -152,7 +152,7 @@ object_config = {
     },
     'TYPE_OTHER': {
         'facecolor': 'xkcd:black',
-        'linewidth': 1,
+        'linewidth': 2,
         'linestyle': '-',
         'alpha': 0.5
     },

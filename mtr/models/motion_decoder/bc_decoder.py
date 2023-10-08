@@ -629,11 +629,11 @@ class BCDecoder(nn.Module):
         self.forward_ret_dict['pred_list'] = pred_list
         self.forward_ret_dict['pred_ctrl'] = pred_ctrl
         
-        self.forward_ret_dict['center_gt_trajs'] = input_dict['center_gt_trajs']
-        self.forward_ret_dict['center_gt_trajs_mask'] = input_dict['center_gt_trajs_mask']
-        self.forward_ret_dict['center_gt_final_valid_idx'] = input_dict['center_gt_final_valid_idx']
-        self.forward_ret_dict['obj_trajs_future_state'] = input_dict['obj_trajs_future_state']
-        self.forward_ret_dict['obj_trajs_future_mask'] = input_dict['obj_trajs_future_mask']
+        self.forward_ret_dict['center_gt_trajs'] = input_dict.get('center_gt_trajs', None)
+        self.forward_ret_dict['center_gt_trajs_mask'] = input_dict.get('center_gt_trajs_mask', None)
+        self.forward_ret_dict['center_gt_final_valid_idx'] = input_dict.get('center_gt_final_valid_idx', None)
+        self.forward_ret_dict['obj_trajs_future_state'] = input_dict.get('obj_trajs_future_state', None)
+        self.forward_ret_dict['obj_trajs_future_mask'] = input_dict.get('obj_trajs_future_mask', None)
 
         self.forward_ret_dict['center_objects_type'] = input_dict['center_objects_type']
         
@@ -643,6 +643,7 @@ class BCDecoder(nn.Module):
             self.generate_final_prediction(pred_list=pred_list, batch_dict=batch_dict)
         
         # Record the prediction results
+        batch_dict['pred_ctrl_scores'] = self.forward_ret_dict['pred_list'][-1][0]
         batch_dict['pred_ctrl'] = pred_ctrl
         batch_dict['pred_scores'] = pred_scores
         batch_dict['pred_trajs'] = pred_trajs

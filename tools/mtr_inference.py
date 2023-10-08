@@ -80,7 +80,6 @@ class MTRInference():
         self.model.eval()
         with torch.no_grad():
             batch_pred_dicts = self.model(batch_dict)
-            print(batch_pred_dicts['pred_ctrl'])
         if generate_prediction:
             final_pred_dicts = self.dataset.generate_prediction_dicts(batch_pred_dicts)
             return final_pred_dicts
