@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any, Union, Dict, List, Optional
 import numpy as np
 from mtr.datasets.waymo.waymo_dataset import WaymoDataset
 from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose
@@ -40,7 +40,10 @@ class BatchMTREnv:
         
         return self.batch_scene_data
             
-    def visualize(self, index: Union[int, list] = None, auto_zoom: int = 20):
+    def visualize(self, index: Union[int, List] = None, batch_dict: Dict = None, auto_zoom: int = 20):
+        if batch_dict is not None:
+            pred_trajs_world = batch_dict['pred_trajs_world']
+            
         if index is None:
             index = list(range(self.num_envs))    
         if isinstance(index, int):
@@ -49,7 +52,12 @@ class BatchMTREnv:
         ax_list = []
         fig_list = []
         for i in index:
-            fig, ax = self.envs_list[i].visualize(auto_zoom = auto_zoom)
+            env_mask = self.batch_scene_data['batch_env_idx'] == i
+            pred_trajs_world = None if batch_dict is None else batch_dict['pred_trajs_world'][env_mask]
+            pred_scores = None if batch_dict is None else batch_dict['pred_scores'][env_mask].cpu().numpy()
+            fig, ax = self.envs_list[i].visualize(pred_trajs = pred_trajs_world, 
+                                                  pred_scores = pred_scores,
+                                                  auto_zoom = auto_zoom, )
             ax_list.append(ax)
             fig_list.append(fig)
         return fig_list, ax_list
@@ -82,7 +90,8 @@ class BatchMTREnv:
 
         input_dict = {}
         for key, val_list in key_to_list.items():
-            
+            if key == 'track_index_to_predict':
+                print(val_list)
             if key == 'obj_trajs':
                 batch_env_idx = np.concatenate([np.ones(x.shape[0])*i for i, x in enumerate(val_list)], axis=0)
                 
@@ -107,7 +116,7 @@ class BatchMTREnv:
             'batch_env_idx': batch_env_idx,
             }
         return batch_dict
-        
+    
 class MTREnv:
     def __init__(
         self,
@@ -128,13 +137,12 @@ class MTREnv:
             self.index = self.random_gen.integers(self.num_scenes)
         else:
             self.index = index
-                
+                           
         # Load the raw data from the dataset
         self.scene_id, self.info = self.dataset.load_info(self.index)
         
         self.current_time_index = self.info['current_time_index']
         self.history_length = self.current_time_index + 1
-        self.track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
         self.sdc_track_index = None if no_sdc else self.info['sdc_track_index']
         self.history_timestamps = np.array(self.info['timestamps_seconds'][:self.history_length])
         self.dt = self.history_timestamps[1] - self.history_timestamps[0]
@@ -156,13 +164,15 @@ class MTREnv:
         self.map_infos= self.info['map_infos']
         
         # Get interested objects
-        self.center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = np.bool)
-        self.center_objects_mask[self.track_index_to_predict] = True
+        self.track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
+        center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = np.bool)
+        center_objects_mask[self.track_index_to_predict] = True
         current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
-        self.center_objects_mask = np.logical_and(self.center_objects_mask, current_valid)
+        center_objects_mask = np.logical_and(center_objects_mask, current_valid)
+        self.track_index_to_predict = np.argwhere(center_objects_mask).reshape(-1)
         
-        self.center_objects_id = np.array(track_infos['object_id'])[self.center_objects_mask]
-        self.center_objects_type = np.array(track_infos['object_type'])[self.center_objects_mask]
+        self.center_objects_id = np.array(track_infos['object_id'])[self.track_index_to_predict]
+        self.center_objects_type = np.array(track_infos['object_type'])[self.track_index_to_predict]
         
         self.scene_data = self.extract_scene_data()
         return self.scene_data
@@ -186,7 +196,7 @@ class MTREnv:
         # [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
         '''
         # Get the current state
-        T_cur = self.state_to_SE2(self.obj_trajs_sim[self.center_objects_mask, self.current_time_index])
+        T_cur = self.state_to_SE2(self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index])
         
         # Get the relative SE2 
         T_rel = self.exp_map(rel_se2)
@@ -195,30 +205,30 @@ class MTREnv:
         T_next =np.einsum('...ij,...jk->...ik', T_cur, T_rel)
         
         x_next, y_next, theta_next = self.SE2_to_state(T_next)
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 0] = x_next
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 1] = y_next
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 0] = x_next
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 1] = y_next
         
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 2] = \
-                self.obj_trajs_sim[self.center_objects_mask, self.current_time_index, 2] # z
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 2] = \
+                self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 2] # z
             
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 3] = \
-                x_next - self.obj_trajs_sim[self.center_objects_mask, self.current_time_index, 0] # dx
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 3] = \
+                x_next - self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 0] # dx
             
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 4] = \
-                y_next - self.obj_trajs_sim[self.center_objects_mask, self.current_time_index, 1] # dy
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 4] = \
+                y_next - self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 1] # dy
                 
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 5] = 0 # dz
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 5] = 0 # dz
             
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 6] = theta_next
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 6] = theta_next
         
         # predict the velocity          
         v_body = rel_se2/self.dt
         v_body[..., -1] = 0 # No translation 
         v_world = np.einsum('...ij,...j->...i', T_cur, v_body)
         
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 7] = v_world[..., 0] # vel_x
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 8] = v_world[..., 1] # vel_y
-        self.obj_trajs_sim[self.center_objects_mask, self.current_time_index + 1, 9] = 1
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 7] = v_world[..., 0] # vel_x
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 8] = v_world[..., 1] # vel_y
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 9] = 1
         
     def step_gt(self):
         '''
@@ -238,7 +248,7 @@ class MTREnv:
         begin_idx = end_idx - self.history_length
         
         obj_trajs_past = self.obj_trajs_sim[:, begin_idx:end_idx]
-        center_objects = obj_trajs_past[self.center_objects_mask, -1]
+        center_objects = obj_trajs_past[self.track_index_to_predict, -1]
         
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
             track_index_to_predict_new, obj_types, obj_ids) \
@@ -251,6 +261,7 @@ class MTREnv:
             obj_types=self.obj_types,
             obj_ids=self.obj_ids
         )
+        print(track_index_to_predict_new)
         
         # Extract the map information
         # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
@@ -505,8 +516,14 @@ class MTREnv:
 
         return ret_obj_trajs, ret_obj_valid_mask
     
-    @staticmethod
-    def transform_trajs_to_center_coords(obj_trajs, center_xyz, center_heading, heading_index, rot_vel_index=None):
+    def transform_trajs_to_center_coords(
+        self, 
+        obj_trajs,
+        center_xyz,
+        center_heading,
+        heading_index,
+        rot_vel_index=None,
+    ):
         """
         Args:
             obj_trajs (num_objects, num_timestamps, num_attrs):
@@ -517,7 +534,32 @@ class MTREnv:
         return:
             obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
         """
-        def rotate_points_along_z(points, angle):
+        num_objects, num_timestamps, num_attrs = obj_trajs.shape
+        num_center_objects = center_xyz.shape[0]
+        assert center_xyz.shape[0] == center_heading.shape[0]
+        assert center_xyz.shape[1] in [3, 2]
+
+        obj_trajs = np.copy(obj_trajs)[None].repeat(num_center_objects, axis=0)
+        obj_trajs[:, :, :, 0:center_xyz.shape[1]] -= center_xyz[:, None, None, :]
+        obj_trajs[:, :, :, 0:2] = self.rotate_points_along_z(
+            points=obj_trajs[:, :, :, 0:2].reshape(num_center_objects, -1, 2),
+            angle=-center_heading
+        ).reshape(num_center_objects, num_objects, num_timestamps, 2)
+
+        obj_trajs[:, :, :, heading_index] -= center_heading[:, None, None]
+
+        # rotate direction of velocity
+        if rot_vel_index is not None:
+            assert len(rot_vel_index) == 2
+            obj_trajs[:, :, :, rot_vel_index] = self.rotate_points_along_z(
+                points=obj_trajs[:, :, :, rot_vel_index].reshape(num_center_objects, -1, 2),
+                angle=-center_heading
+            ).reshape(num_center_objects, num_objects, num_timestamps, 2)
+
+        return obj_trajs
+    
+    @staticmethod
+    def rotate_points_along_z(points, angle):
             """
             Args:
                 points: (B, N, 3 + C)
@@ -545,34 +587,12 @@ class MTREnv:
                 points_rot = np.concatenate((points_rot, points[:, :, 3:]), axis=-1)
             return points_rot
         
-        num_objects, num_timestamps, num_attrs = obj_trajs.shape
-        num_center_objects = center_xyz.shape[0]
-        assert center_xyz.shape[0] == center_heading.shape[0]
-        assert center_xyz.shape[1] in [3, 2]
-
-        obj_trajs = np.copy(obj_trajs)[None].repeat(num_center_objects, axis=0)
-        obj_trajs[:, :, :, 0:center_xyz.shape[1]] -= center_xyz[:, None, None, :]
-        obj_trajs[:, :, :, 0:2] = rotate_points_along_z(
-            points=obj_trajs[:, :, :, 0:2].reshape(num_center_objects, -1, 2),
-            angle=-center_heading
-        ).reshape(num_center_objects, num_objects, num_timestamps, 2)
-
-        obj_trajs[:, :, :, heading_index] -= center_heading[:, None, None]
-
-        # rotate direction of velocity
-        if rot_vel_index is not None:
-            assert len(rot_vel_index) == 2
-            obj_trajs[:, :, :, rot_vel_index] = rotate_points_along_z(
-                points=obj_trajs[:, :, :, rot_vel_index].reshape(num_center_objects, -1, 2),
-                angle=-center_heading
-            ).reshape(num_center_objects, num_objects, num_timestamps, 2)
-
-        return obj_trajs
-    
-    
-    
     ######################## Visualization ########################
-    def visualize(self, auto_zoom: int = 20):
+    def visualize(self, 
+        pred_trajs: np.ndarray = None,
+        pred_scores: np.ndarray = None,          
+        auto_zoom: int = 20,
+    ):
         fig, ax = plot_map(self.map_infos)
         plot_signal(self.info['dynamic_map_infos'], self.current_time_index, ax)
         plot_traj_with_time(
@@ -585,7 +605,18 @@ class MTREnv:
             self.obj_types, self.obj_trajs_sim[:, self.current_time_index]
         ):
             plot_obj_pose(obj_type, traj, ax=ax)
-            
+
+        if pred_trajs is not None:
+            for i in range(pred_trajs.shape[0]):
+                traj = pred_trajs[i]
+                score = pred_scores[i]
+                for future, score in zip(traj, score):
+                    if score < 0.1:
+                        continue
+                    ax.plot(future[:, 0], future[:, 1],
+                            color='xkcd:russet', linewidth=2, linestyle='-', 
+                            alpha=score*0.7+0.3, zorder=2)
+
         if auto_zoom>=0:
             # Zoom in to the current scene
             valid_traj_mask = self.obj_trajs_sim[..., -1] > 0

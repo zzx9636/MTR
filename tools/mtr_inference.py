@@ -9,12 +9,13 @@ from mtr.datasets.waymo.generate_graph import generate_map_graph
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 from tqdm import tqdm
+from mtr.utils import common_utils
 
 from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose, plot_traj_with_speed
 from .mtr_lightning import MTR_Lightning, PrintLogger 
 
 class MTRInference():
-    def __init__(self, cfg_file: str, ckpt_path: str) -> None:
+    def __init__(self, cfg_file: str) -> None:
         print("=========== MTR Inference ===========")
         self.cfg = cfg
         cfg_from_yaml_file(cfg_file, self.cfg)
@@ -25,7 +26,7 @@ class MTRInference():
         ### Build Model ###
         # self.model = model_utils.MotionTransformer(config=cfg.MODEL)
         self.model = MTR_Lightning(cfg)
-        self.model = self.model.load_from_checkpoint(ckpt_path)
+        
         
         ### Load Checkpoint ###
         # _ = self.model.load_params_from_file(filename=ckpt_path, to_cpu=False)
@@ -34,7 +35,13 @@ class MTRInference():
         #     self.model = self.model.cuda()
         
         # self.model.eval()
+    def load_from_checkpoint(self, ckpt_path: str):
+        self.model = self.model.load_from_checkpoint(ckpt_path)
         
+    def load_from_params(self, params_path: str):
+        self.model.model.load_params_from_file(params_path)
+        self.model.cuda()   
+             
     def generate_info(self, index):
         return self.dataset.load_info(index)
     
@@ -68,7 +75,7 @@ class MTRInference():
         
         return scene_id, info, data_batch
         
-    def inference(self, batch_dict: Dict, generate_prediction: bool = True) -> List[Dict]:
+    def inference(self, batch_dict: Dict) -> List[Dict]:
         '''
         This function runs inference on the model.
         
@@ -80,11 +87,52 @@ class MTRInference():
         self.model.eval()
         with torch.no_grad():
             batch_pred_dicts = self.model(batch_dict)
-        if generate_prediction:
-            final_pred_dicts = self.dataset.generate_prediction_dicts(batch_pred_dicts)
-            return final_pred_dicts
-        else:
-            return batch_pred_dicts
+            batch_pred_dicts = self.generate_prediction_dicts(batch_pred_dicts)
+        return batch_pred_dicts
+        
+    def sample_control(self, batch_dict: Dict) -> List[Dict]:
+        batch_pred_dicts = self.inference(batch_dict, generate_prediction=False)
+    
+    def generate_prediction_dicts(self, batch_dict, output_path=None):
+        """
+        Args:
+            batch_dict:
+                pred_scores: (num_center_objects, num_modes)
+                pred_trajs: (num_center_objects, num_modes, num_timestamps, 7)
+
+            input_dict:
+                center_objects_world: (num_center_objects, 10)
+                center_objects_type: (num_center_objects)
+                center_objects_id: (num_center_objects)
+                center_gt_trajs_src: (num_center_objects, num_timestamps, 10)
+        """
+        input_dict = batch_dict['input_dict']
+
+        pred_trajs = batch_dict['pred_trajs']
+        center_objects_world = input_dict['center_objects_world'].type_as(pred_trajs)
+
+        num_center_objects, num_modes, num_timestamps, num_feat = pred_trajs.shape
+        assert num_feat == 7
+        
+        pred_trajs_xy = pred_trajs[:, :, :, 0:2].view(num_center_objects, num_modes * num_timestamps, 2)
+        pred_trajs_v = pred_trajs[:, :, :, 5:7].view(num_center_objects, num_modes * num_timestamps, 2)
+                
+        pred_trajs_xy = common_utils.rotate_points_along_z(
+            points=pred_trajs_xy,
+            angle=center_objects_world[:, 6].view(num_center_objects)
+        ).view(num_center_objects, num_modes, num_timestamps, 2)
+        pred_trajs_xy  = pred_trajs_xy+ center_objects_world[:, None, None, 0:2]
+        
+        pred_trajs_v = common_utils.rotate_points_along_z(
+            points=pred_trajs_v,
+            angle=center_objects_world[:, 6].view(num_center_objects)
+        ).view(num_center_objects, num_modes, num_timestamps, 2)
+        
+        pred_trajs_world = torch.cat([pred_trajs_xy, pred_trajs_v], dim=-1)        
+
+        batch_dict['pred_trajs_world'] = pred_trajs_world.cpu().numpy()
+        
+        return batch_dict
     
     def plot_result(self, scene_id: str, info: dict, final_pred_dicts: dict, shift: int = 0, plot_gt: bool = False):
         # Visualize
@@ -118,7 +166,6 @@ class MTRInference():
         ax.set_title(f'Scene {scene_id} at {t/10} seconds')
         return fig, ax
         
-    
     def visualize(self, scene_id: str, info: dict, shift: int = 0, plot_gt: bool = False):
         '''
         Get the input data, run inference, and visualize the results.

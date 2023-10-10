@@ -121,7 +121,7 @@ stop_sign_config = {
     'facecolor': 'xkcd:red',
     'edgecolor': 'none',
     'linewidth': 1,
-    'radius': 3,
+    'radius': 2,
     'alpha': 1,
 }
 
