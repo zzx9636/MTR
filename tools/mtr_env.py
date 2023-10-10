@@ -90,8 +90,6 @@ class BatchMTREnv:
 
         input_dict = {}
         for key, val_list in key_to_list.items():
-            if key == 'track_index_to_predict':
-                print(val_list)
             if key == 'obj_trajs':
                 batch_env_idx = np.concatenate([np.ones(x.shape[0])*i for i, x in enumerate(val_list)], axis=0)
                 
@@ -131,7 +129,7 @@ class MTREnv:
         self.max_timestamp = max_step
         self.reset()
     
-    def reset(self, index: int = None, no_sdc: bool = False):
+    def reset(self, index: int = None, no_sdc: bool = False, predict_type = 'interested'):
         # Index of the scene from Dataset
         if index is None or index >= self.num_scenes:
             self.index = self.random_gen.integers(self.num_scenes)
@@ -162,7 +160,21 @@ class MTREnv:
         
         # Get Map information
         self.map_infos= self.info['map_infos']
+        if predict_type == 'interested':
+            self.get_interested_index()
+        elif predict_type == 'moving':
+            self.get_moving_index()
+        else:
+            self.get_all_index()
+            
         
+        self.center_objects_id = np.array(track_infos['object_id'])[self.track_index_to_predict]
+        self.center_objects_type = np.array(track_infos['object_type'])[self.track_index_to_predict]
+        
+        self.scene_data = self.extract_scene_data()
+        return self.scene_data
+    
+    def get_interested_index(self):
         # Get interested objects
         self.track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
         center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = np.bool)
@@ -171,11 +183,15 @@ class MTREnv:
         center_objects_mask = np.logical_and(center_objects_mask, current_valid)
         self.track_index_to_predict = np.argwhere(center_objects_mask).reshape(-1)
         
-        self.center_objects_id = np.array(track_infos['object_id'])[self.track_index_to_predict]
-        self.center_objects_type = np.array(track_infos['object_type'])[self.track_index_to_predict]
+    def get_all_index(self):
+        current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
+        self.track_index_to_predict = np.argwhere(current_valid).reshape(-1)
         
-        self.scene_data = self.extract_scene_data()
-        return self.scene_data
+    def get_moving_index(self):
+        current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
+        current_speed = np.linalg.norm(self.obj_trajs_gt[:, self.current_time_index, 7:9], axis = -1)
+        current_moving = current_speed > 0.1
+        self.track_index_to_predict = np.argwhere(np.logical_and(current_valid, current_moving)).reshape(-1)
         
     def step(self, rel_se2: np.ndarray):
         self.step_gt()
@@ -261,7 +277,6 @@ class MTREnv:
             obj_types=self.obj_types,
             obj_ids=self.obj_ids
         )
-        print(track_index_to_predict_new)
         
         # Extract the map information
         # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
