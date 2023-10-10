@@ -29,14 +29,14 @@ class BatchMTREnv:
         else:
             assert reset_bool.shape == (self.num_envs,)
         
-        if reset_bool.sum() > 0 and self.batch_scene_data is not None:
-            batch_list = []
-            for env, do_rest in zip(self.envs_list, reset_bool):
-                if do_rest:
-                    batch_list.append(env.reset(no_sdc = no_sdc))
-                else:
-                    batch_list.append(env.scene_data)
-            self.batch_scene_data = self.__collate_batch__(batch_list)
+        # if reset_bool.sum() > 0 and self.batch_scene_data is not None:
+        batch_list = []
+        for env, do_rest in zip(self.envs_list, reset_bool):
+            if do_rest:
+                batch_list.append(env.reset(no_sdc = no_sdc))
+            else:
+                batch_list.append(env.scene_data)
+        self.batch_scene_data = self.__collate_batch__(batch_list)
         
         return self.batch_scene_data
             
@@ -115,6 +115,19 @@ class BatchMTREnv:
             }
         return batch_dict
     
+    def step(self, rel_se2: np.ndarray):
+        '''
+        Input:
+            rel_se2: (num_envs, 3)
+        '''
+        reset_bool = np.zeros(self.num_envs, dtype = np.bool)
+        for i, env in enumerate(self.envs_list):
+            env_mask = self.batch_scene_data['batch_env_idx'] == i
+            rel_se2_i = rel_se2[env_mask]
+            _, _, reset_bool[i], _ = env.step(rel_se2_i)
+        self.batch_scene_data = self.reset(reset_bool)
+        return self.batch_scene_data
+    
 class MTREnv:
     def __init__(
         self,
@@ -135,6 +148,8 @@ class MTREnv:
             self.index = self.random_gen.integers(self.num_scenes)
         else:
             self.index = index
+            
+        self.index = 1261
                            
         # Load the raw data from the dataset
         self.scene_id, self.info = self.dataset.load_info(self.index)
@@ -201,9 +216,9 @@ class MTREnv:
         self.scene_data = self.extract_scene_data()
         self.reward = self.get_reward()
         self.done = self.check_done()
-        self.info = self.get_info()
+        # self.info = self.get_info()
         
-        return self.scene_data, self.reward, self.done, self.info
+        return self.scene_data, self.reward, self.done, None
         
     def step_control(self, rel_se2: np.ndarray):
         '''
@@ -216,6 +231,7 @@ class MTREnv:
         
         # Get the relative SE2 
         T_rel = self.exp_map(rel_se2)
+        # print(T_rel)
         
         # Predict the next state
         T_next =np.einsum('...ij,...jk->...ik', T_cur, T_rel)
@@ -228,12 +244,13 @@ class MTREnv:
                 self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 2] # z
             
         self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 3] = \
-                x_next - self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 0] # dx
+                self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 3] # dx
             
         self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 4] = \
-                y_next - self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 1] # dy
+                self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 4] # dy
                 
-        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 5] = 0 # dz
+        self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 5] = \
+            self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 5]# dz
             
         self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 6] = theta_next
         
@@ -371,7 +388,7 @@ class MTREnv:
         
         # Compute the translation
         x = sine_by_theta * ux + cosine_minus_one_by_theta * uy
-        y = sine_by_theta * ux - cosine_minus_one_by_theta * uy
+        y = sine_by_theta * uy - cosine_minus_one_by_theta * ux
         
         return self.to_SE2(x, y, theta)
      
@@ -609,7 +626,7 @@ class MTREnv:
         auto_zoom: int = 20,
     ):
         fig, ax = plot_map(self.map_infos)
-        plot_signal(self.info['dynamic_map_infos'], self.current_time_index, ax)
+        # plot_signal(self.info['dynamic_map_infos'], self.current_time_index, ax)
         plot_traj_with_time(
             self.obj_types, 
             self.obj_trajs_sim[:, :self.current_time_index + 1],

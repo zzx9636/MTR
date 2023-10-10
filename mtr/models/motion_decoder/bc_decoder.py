@@ -15,7 +15,7 @@ from mtr.models.utils.transformer import position_encoding_utils
 from mtr.models.utils import common_layers
 from mtr.utils import common_utils, loss_utils, motion_utils
 from mtr.config import cfg
-
+from torch.distributions import MultivariateNormal, Categorical, MixtureSameFamily
 
 class BCDecoder(nn.Module):
     def __init__(self, in_channels, config):
@@ -533,7 +533,7 @@ class BCDecoder(nn.Module):
         pred_ctrl = self.forward_ret_dict['pred_ctrl'].cuda() # (num_center_objects, num_query, 9)
         center_gt_ctrl = self.log_map(center_gt_xyt) # (num_center_objects, 3)
         
-        pred_scores, pred_trajs = self.forward_ret_dict['pred_list'][-1]
+        pred_scores, _ = self.forward_ret_dict['pred_list'][-1]
         
         if tb_dict is None:
             tb_dict = {}
@@ -624,10 +624,12 @@ class BCDecoder(nn.Module):
             map_feature=map_feature, map_mask=map_mask, map_pos=map_pos,
             input_query=input_query
         )
+        pred_ctrl_score = pred_list[-1][0]
         
         # Record for loss calculation
         self.forward_ret_dict['pred_list'] = pred_list
         self.forward_ret_dict['pred_ctrl'] = pred_ctrl
+        self.forward_ret_dict['pred_ctrl_score'] = pred_ctrl_score
         
         self.forward_ret_dict['center_gt_trajs'] = input_dict.get('center_gt_trajs', None)
         self.forward_ret_dict['center_gt_trajs_mask'] = input_dict.get('center_gt_trajs_mask', None)
@@ -649,3 +651,42 @@ class BCDecoder(nn.Module):
         batch_dict['pred_trajs'] = pred_trajs
             
         return batch_dict
+    
+    def sample_control(self, pred_ctrl, pred_ctrl_score, log_std_range=(-4.0, 4.0), rho_limit=0.4):
+        '''
+        Construct a Gaussian Mixture Model for the control sampling
+        input:
+            pred_ctrl: (num_center_objects, num_query, 6 or 9)
+            pred_ctrl_score: (num_center_objects, num_query)
+        output:
+        '''
+        
+        independent = pred_ctrl.shape[-1] == 6
+        
+        mean = pred_ctrl[..., 0:3] # (num_center_objects, num_query, 3)
+        log_std1 = torch.clip(pred_ctrl[..., 3], min=log_std_range[0], max=log_std_range[1])
+        log_std2 = torch.clip(pred_ctrl[..., 4], min=log_std_range[0], max=log_std_range[1])
+        log_std3 = torch.clip(pred_ctrl[..., 5], min=log_std_range[0], max=log_std_range[1])
+        std1 = torch.exp(log_std1)
+        std2 = torch.exp(log_std2)
+        std3 = torch.exp(log_std3)
+        
+        if independent:
+            rho1 = rho2 = rho3 = torch.zeros_like(log_std1)
+        else:
+            rho1 = torch.clip(pred_ctrl[..., 6], min=-rho_limit, max=rho_limit) # 1&2
+            rho2 = torch.clip(pred_ctrl[..., 7], min=-rho_limit, max=rho_limit) # 1&3
+            rho3 = torch.clip(pred_ctrl[..., 8], min=-rho_limit, max=rho_limit) # 2&3 
+            
+        covariance = torch.stack([
+            torch.stack([std1**2, rho1*std1*std2, rho2*std1*std3], dim=-1),
+            torch.stack([rho1*std1*std2, std2**2, rho3*std2*std3], dim=-1),
+            torch.stack([rho2*std1*std3, rho3*std2*std3, std3**2], dim=-1),
+        ], dim=-1) # (num_center_objects, num_query, 3, 3)
+        
+        dist_mode = MultivariateNormal(mean, covariance_matrix=covariance)
+        mix = Categorical(logits=pred_ctrl_score)
+        gmm = MixtureSameFamily(mix, dist_mode)
+        return gmm
+        
+        
