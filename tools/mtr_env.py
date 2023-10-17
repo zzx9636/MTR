@@ -23,7 +23,7 @@ class BatchMTREnv:
                 
     def reset(self, reset_bool: np.ndarray = None, no_sdc: bool = False):
         if reset_bool is None: # Reset all the environments
-            reset_bool = np.ones(self.num_envs, dtype = np.bool)
+            reset_bool = np.ones(self.num_envs, dtype = bool)
         else:
             assert reset_bool.shape == (self.num_envs,)
         
@@ -122,7 +122,7 @@ class BatchMTREnv:
             rel_se2: (num_envs, 3)
         '''
         batch_scene_data = self.batch_scene_data
-        reset_bool = np.zeros(self.num_envs, dtype = np.bool)
+        reset_bool = np.zeros(self.num_envs, dtype = bool)
         for i, env in enumerate(self.envs_list):
             env_mask = batch_scene_data['batch_env_idx'] == i
             rel_se2_i = rel_se2[env_mask]
@@ -197,7 +197,7 @@ class MTREnv:
     def get_interested_index(self):
         # Get interested objects
         self.track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
-        center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = np.bool)
+        center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = bool)
         center_objects_mask[self.track_index_to_predict] = True
         current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
         center_objects_mask = np.logical_and(center_objects_mask, current_valid)
