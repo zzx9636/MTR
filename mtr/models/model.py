@@ -67,7 +67,8 @@ class MotionTransformer(nn.Module):
         return it, epoch
 
     def load_params_from_file(self, filename, logger = None, 
-                              to_cpu=False, freeze_pretrained = False):
+                              to_cpu=False, freeze_pretrained = False, 
+                              keys_to_ignore = None):
         if not os.path.isfile(filename):
             raise FileNotFoundError
         if logger is not None:
@@ -88,10 +89,14 @@ class MotionTransformer(nn.Module):
             logger.info(f'The number of disk ckpt keys: {len(model_state_disk)}')
         else:
             print(f'The number of disk ckpt keys: {len(model_state_disk)}')
+        
         model_state = self.state_dict()
         model_state_disk_filter = {}
+        
         for key, val in model_state_disk.items():
-            if key in model_state and model_state_disk[key].shape == model_state[key].shape:
+            if keys_to_ignore is not None and keys_to_ignore in key:
+                continue
+            elif key in model_state and model_state_disk[key].shape == model_state[key].shape:
                 model_state_disk_filter[key] = val
             else:
                 if key not in model_state:

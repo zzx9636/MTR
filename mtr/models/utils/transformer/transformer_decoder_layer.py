@@ -89,11 +89,12 @@ class TransformerDecoderLayer(nn.Module):
         """
 
         Args:
-            tgt (num_query, B, C):
-            memory (M1 + M2 + ..., C):
-            pos (M1 + M2 + ..., C):
-            query_pos (num_query, B, C):
-            query_sine_embed (num_query, B, C):
+            tgt (num_query, B, C): This is the query
+            memory (M1 + M2 + ..., C): Key and value
+            pos (M1 + M2 + ..., C): Positional embedding of the key and value
+            query_pos (num_query, B, C): Positional embedding of the query used in the self attention, 
+                and first positional embedding of the query used in the cross attention
+            query_sine_embed (num_query, B, C): Positional embedding of the query used in the cross attention
             is_first (bool, optional):
 
         Returns:
@@ -115,14 +116,14 @@ class TransformerDecoderLayer(nn.Module):
 
             q = q_content + q_pos
             k = k_content + k_pos
-
+            # Do self attention between the queries
             tgt2 = self.self_attn(q, k, value=v, attn_mask=tgt_mask,
                                   key_padding_mask=None)[0]
-            # ========== End of Self-Attention =============
-
+        
+        # Residual connection
             tgt = tgt + self.dropout1(tgt2)
             tgt = self.norm1(tgt)
-
+        # ========== End of Self-Attention =============
 
         if self.use_local_attn:
             # Transform the queries to stack format

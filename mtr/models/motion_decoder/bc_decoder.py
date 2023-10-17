@@ -158,23 +158,27 @@ class BCDecoder(nn.Module):
         num_center_objects, num_objects, _ = obj_feature.shape
 
         # dense future prediction
-        obj_pos_valid = obj_pos[obj_mask][..., 0:2]
-        obj_feature_valid = obj_feature[obj_mask]
-        obj_pos_feature_valid = self.obj_pos_encoding_layer(obj_pos_valid)
-        obj_fused_feature_valid = torch.cat((obj_pos_feature_valid, obj_feature_valid), dim=-1)
+        obj_pos_valid = obj_pos[obj_mask][..., 0:2] # (num_valid_objects, 2)
+        obj_feature_valid = obj_feature[obj_mask] # (num_valid_objects, C)
+        obj_pos_feature_valid = self.obj_pos_encoding_layer(obj_pos_valid) # (num_valid_objects, C)
+        obj_fused_feature_valid = torch.cat((obj_pos_feature_valid, obj_feature_valid), dim=-1) # (num_valid_objects, 2*C)
         
-        pred_dense_trajs_valid = self.dense_future_head(obj_fused_feature_valid)
-        pred_dense_trajs_valid = pred_dense_trajs_valid.view(pred_dense_trajs_valid.shape[0], self.num_future_frames, 7)
-
+        # Predict the trajectory of each object in the object's center
+        pred_dense_trajs_valid = self.dense_future_head(obj_fused_feature_valid) # (num_valid_objects, num_future_frames * 7)
+        pred_dense_trajs_valid = pred_dense_trajs_valid.view(pred_dense_trajs_valid.shape[0], self.num_future_frames, 7) 
+        # (num_valid_objects, num_future_frames, 7)
+        
+        # Shift the predicted trajectory to the coordinate of the center object
         temp_center = pred_dense_trajs_valid[:, :, 0:2] + obj_pos_valid[:, None, 0:2]
-        pred_dense_trajs_valid = torch.cat((temp_center, pred_dense_trajs_valid[:, :, 2:]), dim=-1)
+        pred_dense_trajs_valid = torch.cat((temp_center, pred_dense_trajs_valid[:, :, 2:]), dim=-1) # (num_valid_objects, num_future_frames, 7) 
 
         # future feature encoding and fuse to past obj_feature
-        obj_future_input_valid = pred_dense_trajs_valid[:, :, [0, 1, -2, -1]].flatten(start_dim=1, end_dim=2)  # (num_valid_objects, C)
-        obj_future_feature_valid = self.future_traj_mlps(obj_future_input_valid)
+        # (num_valid_objects, 4*num_future_frames)
+        obj_future_input_valid = pred_dense_trajs_valid[:, :, [0, 1, -2, -1]].flatten(start_dim=1, end_dim=2)  
+        obj_future_feature_valid = self.future_traj_mlps(obj_future_input_valid) # (num_valid_objects, C)
 
-        obj_full_trajs_feature = torch.cat((obj_feature_valid, obj_future_feature_valid), dim=-1)
-        obj_feature_valid = self.traj_fusion_mlps(obj_full_trajs_feature)
+        obj_full_trajs_feature = torch.cat((obj_feature_valid, obj_future_feature_valid), dim=-1) # (num_valid_objects, 2*C)
+        obj_feature_valid = self.traj_fusion_mlps(obj_full_trajs_feature) # (num_valid_objects, C)
 
         ret_obj_feature = torch.zeros_like(obj_feature)
         ret_obj_feature[obj_mask] = obj_feature_valid
@@ -188,7 +192,7 @@ class BCDecoder(nn.Module):
     def get_motion_query(self, center_objects_type, input_query=None):
         num_center_objects = len(center_objects_type)
         if input_query is not None:
-            # # Original MTR
+            # Update
             intention_points = input_query.permute(1, 0, 2)  # (num_query, num_center_objects, 2)
         else:      
             # # Original MTR
@@ -244,7 +248,7 @@ class BCDecoder(nn.Module):
         else:
             batch_size, num_kv, _ = kv_feature.shape
 
-            kv_feature_stack = kv_feature.flatten(start_dim=0, end_dim=1)
+            kv_feature_stack = kv_feature.flatten(start_dim=0, end_dim=1) # (B * N, C)
             kv_pos_embed_stack = kv_pos_embed.permute(1, 0, 2).contiguous().flatten(start_dim=0, end_dim=1)
             kv_mask_stack = kv_mask.view(-1)
 
@@ -305,8 +309,8 @@ class BCDecoder(nn.Module):
     def apply_transformer_decoder(self, center_objects_feature, center_objects_type, obj_feature, obj_mask, obj_pos, map_feature, map_mask, map_pos, input_query=None):
         # Encoded and raw position of intention points
         # ! TODO, use our own intention points
-        intention_query, intention_points = self.get_motion_query(center_objects_type, input_query=input_query)
-        query_content = torch.zeros_like(intention_query)
+        intention_query, intention_points = self.get_motion_query(center_objects_type, input_query=input_query) 
+        query_content = torch.zeros_like(intention_query) # [num_query, num_center_objects, C]
         self.forward_ret_dict['intention_points'] = intention_points.permute(1, 0, 2)  # (num_center_objects, num_query, 2)
 
         num_center_objects = query_content.shape[1]
@@ -588,6 +592,7 @@ class BCDecoder(nn.Module):
         input_dict = batch_dict['input_dict']
         input_query = input_dict.get('intention_points', None)
         if input_query is not None:
+            print("Using intention points")
             input_query = input_query.float().cuda()
             
         # Aggregate features over the history 
@@ -598,7 +603,7 @@ class BCDecoder(nn.Module):
         num_polylines = map_feature.shape[1]
         
         # input projection 
-        # project each feature to a higher dimension
+        # Simply use MLP project each feature from a high dim to a higher dimension
         center_objects_feature = self.in_proj_center_obj(center_objects_feature)
         obj_feature_valid = self.in_proj_obj(obj_feature[obj_mask])
         obj_feature = obj_feature.new_zeros(num_center_objects, num_objects, obj_feature_valid.shape[-1])

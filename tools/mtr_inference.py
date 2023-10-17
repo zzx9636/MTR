@@ -84,10 +84,9 @@ class MTRInference():
         Returns:
             final_pred_dicts List(dict): The output of the model.
         '''
-        self.model.eval()
-        with torch.no_grad():
-            batch_pred_dicts = self.model(batch_dict)
-            batch_pred_dicts = self.generate_prediction_dicts(batch_pred_dicts)
+
+        batch_pred_dicts = self.model(batch_dict)
+        batch_pred_dicts = self.generate_prediction_dicts(batch_pred_dicts)
         return batch_pred_dicts
         
     def sample_control(self, batch_dict: Dict) -> List[Dict]:
@@ -130,7 +129,7 @@ class MTRInference():
         
         pred_trajs_world = torch.cat([pred_trajs_xy, pred_trajs_v], dim=-1)        
 
-        batch_dict['pred_trajs_world'] = pred_trajs_world.cpu().numpy()
+        batch_dict['pred_trajs_world'] = pred_trajs_world.detach().cpu().numpy()
         
         return batch_dict
     

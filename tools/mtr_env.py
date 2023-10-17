@@ -20,9 +20,7 @@ class BatchMTREnv:
         
         # Create the list of environments
         self.envs_list = [MTREnv(dataset, random_gen, max_step) for _ in range(num_envs)]
-        # Construct the batch data
-        self.batch_scene_data = self.__collate_batch__([x.scene_data for x in self.envs_list])
-        
+                
     def reset(self, reset_bool: np.ndarray = None, no_sdc: bool = False):
         if reset_bool is None: # Reset all the environments
             reset_bool = np.ones(self.num_envs, dtype = np.bool)
@@ -36,9 +34,11 @@ class BatchMTREnv:
                 batch_list.append(env.reset(no_sdc = no_sdc))
             else:
                 batch_list.append(env.scene_data)
-        self.batch_scene_data = self.__collate_batch__(batch_list)
         
-        return self.batch_scene_data
+    @property
+    def batch_scene_data(self):
+        batch_list = [x.scene_data for x in self.envs_list]
+        return self.__collate_batch__(batch_list)
             
     def visualize(self, index: Union[int, List] = None, batch_dict: Dict = None, auto_zoom: int = 20):
         if batch_dict is not None:
@@ -51,8 +51,9 @@ class BatchMTREnv:
         
         ax_list = []
         fig_list = []
+        batch_scene_data = self.batch_scene_data
         for i in index:
-            env_mask = self.batch_scene_data['batch_env_idx'] == i
+            env_mask = batch_scene_data['batch_env_idx'] == i
             pred_trajs_world = None if batch_dict is None else batch_dict['pred_trajs_world'][env_mask]
             pred_scores = None if batch_dict is None else batch_dict['pred_scores'][env_mask].cpu().numpy()
             fig, ax = self.envs_list[i].visualize(pred_trajs = pred_trajs_world, 
@@ -120,12 +121,12 @@ class BatchMTREnv:
         Input:
             rel_se2: (num_envs, 3)
         '''
+        batch_scene_data = self.batch_scene_data
         reset_bool = np.zeros(self.num_envs, dtype = np.bool)
         for i, env in enumerate(self.envs_list):
-            env_mask = self.batch_scene_data['batch_env_idx'] == i
+            env_mask = batch_scene_data['batch_env_idx'] == i
             rel_se2_i = rel_se2[env_mask]
             _, _, reset_bool[i], _ = env.step(rel_se2_i)
-        self.batch_scene_data = self.reset(reset_bool)
         return self.batch_scene_data
     
 class MTREnv:
@@ -142,15 +143,13 @@ class MTREnv:
         self.max_timestamp = max_step
         self.reset()
     
-    def reset(self, index: int = None, no_sdc: bool = False, predict_type = 'interested'):
+    def reset(self, index: int = None, no_sdc: bool = False, predict_type = 'interested', shift = 0):
         # Index of the scene from Dataset
         if index is None or index >= self.num_scenes:
             self.index = self.random_gen.integers(self.num_scenes)
         else:
             self.index = index
-            
-        self.index = 1261
-                           
+                                       
         # Load the raw data from the dataset
         self.scene_id, self.info = self.dataset.load_info(self.index)
         
@@ -168,6 +167,12 @@ class MTREnv:
         
         # [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
         self.obj_trajs_gt = track_infos['trajs']  # (num_objects, num_timestamp, 10)
+        
+        if shift > 0:
+            obj_trajs_full_shift = np.zeros_like(self.obj_trajs_gt)
+            obj_trajs_full_shift[:, :-shift,:] = self.obj_trajs_gt[:, shift:,:]
+            self.obj_trajs_gt = obj_trajs_full_shift
+            
         self.num_objects = self.obj_trajs_gt.shape[0]
         self.obj_trajs_sim = np.zeros((self.num_objects, self.max_timestamp, 10))
         self.obj_trajs_sim[:, :self.history_length] \
@@ -182,11 +187,11 @@ class MTREnv:
         else:
             self.get_all_index()
             
-        
         self.center_objects_id = np.array(track_infos['object_id'])[self.track_index_to_predict]
         self.center_objects_type = np.array(track_infos['object_type'])[self.track_index_to_predict]
         
         self.scene_data = self.extract_scene_data()
+        
         return self.scene_data
     
     def get_interested_index(self):
@@ -230,7 +235,8 @@ class MTREnv:
         T_cur = self.state_to_SE2(self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index])
         
         # Get the relative SE2 
-        T_rel = self.exp_map(rel_se2)
+        # T_rel = self.exp_map(rel_se2)
+        T_rel = self.to_SE2(rel_se2[...,0], rel_se2[...,1], rel_se2[...,2]) 
         # print(T_rel)
         
         # Predict the next state
@@ -280,7 +286,8 @@ class MTREnv:
         end_idx = self.current_time_index + 1
         begin_idx = end_idx - self.history_length
         
-        obj_trajs_past = self.obj_trajs_sim[:, begin_idx:end_idx]
+        obj_trajs_past = np.copy(self.obj_trajs_sim[:, begin_idx:end_idx])
+        obj_trajs_past[:, :-1] = 0
         center_objects = obj_trajs_past[self.track_index_to_predict, -1]
         
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
@@ -628,8 +635,8 @@ class MTREnv:
         fig, ax = plot_map(self.map_infos)
         # plot_signal(self.info['dynamic_map_infos'], self.current_time_index, ax)
         plot_traj_with_time(
-            self.obj_types, 
-            self.obj_trajs_sim[:, :self.current_time_index + 1],
+            self.center_objects_type, 
+            self.obj_trajs_sim[self.track_index_to_predict, :self.current_time_index + 1],
             [i*self.dt for i in range(self.current_time_index + 1)],
             ax=ax,
             fig=fig,)
