@@ -102,20 +102,22 @@ class MTR_Lightning(pl.LightningModule):
             return optimizer
         
     def training_step(self, batch, batch_idx):
+        batch_size = len(batch['input_dict']['track_index_to_predict'])
         output = self.model(batch)
         loss = output[0]
         tb_dict = output[1]
         
         log_dict = {f'train/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True)
+        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True, batch_size=batch_size)
         
         return loss
     
     def validation_step(self, batch, batch_idx):
+        batch_size = len(batch['input_dict']['track_index_to_predict'])
         output = self.model(batch)
         tb_dict = output[1]
         log_dict = {f'val/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=False, prog_bar=True, logger=True)
+        self.log_dict(log_dict, on_step=False, prog_bar=True, logger=True, batch_size=batch_size)
         
     def forward(self, batch, get_loss: bool = False):
         return self.model(batch, get_loss)
@@ -127,7 +129,8 @@ class MTR_Lightning(pl.LightningModule):
             pred_scores, pred_ctrls = batch_dict['pred_list'][-1]
             mode, mix, gmm = self.model.motion_decoder.build_mode_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
-            sample = gmm.sample().cpu().numpy()
+            sample = gmm.sample()#.cpu().numpy()
+            sample = (sample * self.model.motion_decoder.output_std + self.model.motion_decoder.output_mean).cpu().numpy()
         return mode, mix, gmm, sample
         
         
@@ -183,9 +186,12 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
         gradient_clip_val=0.5, gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
-            dirpath = 'output/bc',
-            # save_top_k=100, 
-            save_on_train_epoch_end=True),
+                dirpath = 'output/bc',
+                save_top_k=10,
+                save_last=True,
+                monitor='val/loss_layer2', 
+                save_on_train_epoch_end=True
+            ),
             LearningRateMonitor(logging_interval='step')
         ]
     )

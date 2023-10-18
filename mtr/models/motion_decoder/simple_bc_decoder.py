@@ -233,24 +233,15 @@ class SimpleBCDecoder(nn.Module):
 
         assert len(pred_list) == self.num_decoder_layers
         return pred_list
+    
 
-    def build_mode_distribution(self, pred_ctrl, pred_ctrl_score, log_std_range=(-5.0, 2.0), rho_limit=0.4, normalized=True):
+    def build_mode_distribution(self, pred_ctrl, log_std_range=(-5.0, 2.0), rho_limit=0.4):
         independent = pred_ctrl.shape[-1] == 6
     
-        mean_normalized = pred_ctrl[..., 0:3] # (num_center_objects, num_query, 3)
-        
-        if normalized:
-            mean = mean_normalized * self.output_std + self.output_mean
-        else:
-            mean = mean_normalized
-        
+        mean = pred_ctrl[..., 0:3] # (num_center_objects, num_query, 3)
+                
         log_std = torch.clip(pred_ctrl[..., 3:6], min=log_std_range[0], max=log_std_range[1])
-        std_normalized = torch.exp(log_std)
-        
-        if normalized:
-            std = std_normalized * self.output_std
-        else:
-            std = std_normalized
+        std = torch.exp(log_std)
         
         std1 = std[..., 0]
         std2 = std[..., 1]
@@ -270,13 +261,20 @@ class SimpleBCDecoder(nn.Module):
         ], dim=-1) # (num_center_objects, num_query, 3, 3)
         # print(covariance)
         mode = MultivariateNormal(mean, covariance_matrix=covariance)
+      
+        return mode
+    
+    
+    def build_gmm_distribution(self, pred_ctrl, pred_ctrl_score, log_std_range=(-5.0, 2.0), rho_limit=0.4):
+        mode = self.build_mode_distribution(pred_ctrl, log_std_range, rho_limit)
         mix = Categorical(logits=pred_ctrl_score)
         gmm = MixtureSameFamily(mix, mode)
-        return mode, mix, gmm
 
     def get_loss(self, tb_pre_tag=''):
         center_gt = self.forward_ret_dict['center_gt'][...,:3].cuda()
+        # normalize the gt
         center_gt = (center_gt - self.output_mean) / self.output_std
+        center_gt = center_gt.unsqueeze(1) #[b, 1, 3]
 
         pred_list = self.forward_ret_dict['pred_list']
         
@@ -284,11 +282,18 @@ class SimpleBCDecoder(nn.Module):
         total_loss = 0
         for layer_idx in range(self.num_decoder_layers):
             pred_scores, pred_ctrls = pred_list[layer_idx]
-            _ , _, gmm = self.build_mode_distribution(pred_ctrls, pred_scores)
+            best_idx = (pred_ctrls[...,:3] - center_gt).norm(dim=-1).argmin(dim=-1)
+            pred_ctrls_best = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx]
             
-            nll_loss = -gmm.log_prob(center_gt)
+            mode = self.build_mode_distribution(pred_ctrls_best) # [batch size]
             
-            layer_loss = nll_loss.mean()
+            nll_loss = -mode.log_prob(center_gt)
+            
+            # cross entropy loss
+            cls_loss = F.cross_entropy(input  = pred_scores, target= best_idx, reduction='none')
+            
+            layer_loss = nll_loss + cls_loss.sum(dim=-1)
+            layer_loss = layer_loss.mean()
             total_loss += layer_loss
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()
             
