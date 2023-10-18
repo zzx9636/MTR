@@ -127,7 +127,8 @@ class MTR_Lightning(pl.LightningModule):
         with torch.no_grad():
             batch_dict = self.model(batch, get_loss=False)
             pred_scores, pred_ctrls = batch_dict['pred_list'][-1]
-            mode, mix, gmm = self.model.motion_decoder.build_mode_distribution(pred_ctrls, pred_scores)
+            print(pred_ctrls[0, ..., :3])
+            mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
             sample = gmm.sample()#.cpu().numpy()
             sample = (sample * self.model.motion_decoder.output_std + self.model.motion_decoder.output_mean).cpu().numpy()
