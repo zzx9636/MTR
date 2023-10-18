@@ -104,6 +104,7 @@ class WaymoDatasetBC(DatasetTemplate):
         center_objects, traj_window, track_index_to_predict = self.get_interested_agents(
             track_index_to_predict=track_index_to_predict,
             obj_trajs_raw=obj_trajs_raw,
+            obj_types = obj_types,
             current_time_index=current_time_index,
             history_length=history_length,
         )
@@ -213,7 +214,8 @@ class WaymoDatasetBC(DatasetTemplate):
                 center_gt_trajs_mask, track_index_to_predict_new, 
                 sdc_track_index_new, obj_types, obj_ids)
 
-    def get_interested_agents(self, track_index_to_predict, obj_trajs_raw, current_time_index, history_length):
+    def get_interested_agents(self, track_index_to_predict, obj_trajs_raw, 
+                              obj_types, current_time_index, history_length):
         '''
         This function extract the current state of the objects that need to be predicted from the all objects' trajectories
         Args:
@@ -239,6 +241,10 @@ class WaymoDatasetBC(DatasetTemplate):
         traj_window = obj_trajs_raw[:, current_time_index-history_length+1:current_time_index+2, :]
         assert traj_window.shape[-2] == history_length+1
         for obj_idx in track_index_to_predict:
+            obj_type = obj_types[obj_idx]
+            if obj_type != 'TYPE_VEHICLE':
+                continue
+            
             if not np.all(traj_window[obj_idx, -2:, -1]):
                 continue
             # Check for wired missing mask cases

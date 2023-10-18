@@ -61,7 +61,7 @@ class SimpleBCDecoder(nn.Module):
             self.map_query_embed_mlps = None
             
         # Create a place holder for the motion query
-        self.query = nn.Parameter(torch.zeros(self.num_motion_modes, self.d_model), requires_grad=True)
+        self.query = nn.Parameter(torch.rand(self.num_motion_modes, self.d_model), requires_grad=True)
 
         self.query_mlps = common_layers.build_mlps(
             c_in=self.d_model, mlp_channels=[self.d_model, self.d_model], ret_before_act=True
@@ -189,7 +189,7 @@ class SimpleBCDecoder(nn.Module):
         dynamic_query_center = torch.zeros((num_query, num_center_objects, 2), device=query_content.device)  # (num_query, num_center_objects, 3)
 
         pred_list = []
-        
+        # query_embed.register_hook(print)
         for layer_idx in range(self.num_decoder_layers):
             # print(dynamic_query_center[:, 1, :])
             # ! Why initial query_content is all zeros?
@@ -201,7 +201,6 @@ class SimpleBCDecoder(nn.Module):
                 dynamic_query_center=dynamic_query_center,
                 layer_idx=layer_idx
             ) 
-
             map_query_feature = self.apply_cross_attention(
                 kv_feature=map_feature, kv_mask=map_mask, kv_pos=map_pos,
                 query_content=query_content, query_embed=query_embed,
@@ -211,6 +210,7 @@ class SimpleBCDecoder(nn.Module):
                 query_content_pre_mlp=self.map_query_content_mlps[layer_idx],
                 query_embed_pre_mlp=self.map_query_embed_mlps
             ) 
+            
 
             query_feature = torch.cat([center_objects_feature, obj_query_feature, map_query_feature], dim=-1)
             query_content = self.query_feature_fusion_layers[layer_idx](
@@ -318,10 +318,11 @@ class SimpleBCDecoder(nn.Module):
         map_feature[map_mask] = map_feature_valid
         
         # Process the query
+        # self.query.register_hook(print)
         query_embed = self.query_mlps(self.query)  # (Q, C)
+        # query_embed.register_hook(print)
 
         query_embed = query_embed.unsqueeze(1).repeat(1, num_center_objects, 1)  # (Q, N, C)
-        
         # decoder layers
         pred_list = self.apply_transformer_decoder(
             center_objects_feature=center_objects_feature,

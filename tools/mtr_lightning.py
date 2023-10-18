@@ -45,7 +45,8 @@ class MTR_Lightning(pl.LightningModule):
         '''
         
         param2opt = [param for param in self.model.parameters() if param.requires_grad]
-        
+        # print('motion_decoder.query' in param2opt)
+        # print(param2opt)
         if self.opt_cfg.OPTIMIZER == 'Adam':
             optimizer = torch.optim.Adam(
                 param2opt,
