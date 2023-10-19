@@ -126,8 +126,8 @@ class MTR_Lightning(pl.LightningModule):
         self.eval()
         with torch.no_grad():
             batch_dict = self.model(batch, get_loss=False)
-            pred_scores, pred_ctrls = batch_dict['pred_list'][-1]
-            print(pred_ctrls[0, ..., :3])
+            pred_scores = batch_dict['pred_scores']
+            pred_ctrls = batch_dict['pred_ctrls']
             mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
             sample = gmm.sample()#.cpu().numpy()
@@ -190,7 +190,7 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
                 dirpath = 'output/bc',
                 save_top_k=10,
                 save_last=True,
-                monitor='val/loss_layer2', 
+                monitor='val/loss_total', 
                 save_on_train_epoch_end=True
             ),
             LearningRateMonitor(logging_interval='step')
@@ -203,7 +203,7 @@ if __name__ == '__main__':
     train(
         'tools/cfgs/waymo/bc+10_percent_data.yaml',
         'model/checkpoint_epoch_30.pth',
-        True
+        False
     )
 
          

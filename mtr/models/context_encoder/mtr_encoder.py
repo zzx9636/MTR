@@ -188,7 +188,6 @@ class MTREncoder(nn.Module):
         obj_polylines_feature = global_token_feature[:, :num_objects]
         map_polylines_feature = global_token_feature[:, num_objects:]
         assert map_polylines_feature.shape[1] == num_polylines
-
         # organize return features
         center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
 

@@ -60,7 +60,9 @@ class TransformerDecoderLayer(nn.Module):
         self.linear2 = nn.Linear(dim_feedforward, d_model)
 
 
-        self.norm2 = nn.LayerNorm(d_model)
+        self.norm2_q = nn.LayerNorm(d_model)
+        self.norm2_kv = nn.LayerNorm(d_model)
+        
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
@@ -106,11 +108,12 @@ class TransformerDecoderLayer(nn.Module):
         if not self.rm_self_attn_decoder:
             # Apply projections here
             # shape: num_queries x batch_size x 256
-            q_content = self.sa_qcontent_proj(tgt)      # target is the input of the first decoder layer. zero by default.
+            tgt_norm = self.norm1(tgt)
+            q_content = self.sa_qcontent_proj(tgt_norm)      # target is the input of the first decoder layer. zero by default.
             q_pos = self.sa_qpos_proj(query_pos)
-            k_content = self.sa_kcontent_proj(tgt)
+            k_content = self.sa_kcontent_proj(tgt_norm)
             k_pos = self.sa_kpos_proj(query_pos)
-            v = self.sa_v_proj(tgt)
+            v = self.sa_v_proj(tgt_norm)
 
             num_queries, bs, n_model = q_content.shape
             hw, _, _ = k_content.shape
@@ -125,7 +128,7 @@ class TransformerDecoderLayer(nn.Module):
             
         # Residual connection
             tgt = tgt + self.dropout1(tgt2)
-            tgt = self.norm1(tgt)
+            # tgt = self.norm1(tgt)
         # ========== End of Self-Attention =============
 
         if self.use_local_attn:
@@ -140,7 +143,8 @@ class TransformerDecoderLayer(nn.Module):
         # ========== Begin of Cross-Attention =============
         # Apply projections here
         # shape: num_queries x batch_size x 256
-        q_content = self.ca_qcontent_proj(tgt)
+        tgt_norm = self.norm2_q(tgt)
+        q_content = self.ca_qcontent_proj(tgt_norm)
 
         if self.use_local_attn and memory_valid_mask is not None:
             valid_memory = memory[memory_valid_mask]
@@ -158,8 +162,9 @@ class TransformerDecoderLayer(nn.Module):
             k_pos = pos.new_zeros(memory.shape[0], k_pos_valid.shape[-1])
             k_pos[memory_valid_mask] = k_pos_valid
         else:
-            k_content = self.ca_kcontent_proj(memory)
-            v = self.ca_v_proj(memory)
+            memory_norm = self.norm2_kv(memory)
+            k_content = self.ca_kcontent_proj(memory_norm)
+            v = self.ca_v_proj(memory_norm)
             k_pos = self.ca_kpos_proj(pos)
         
         # For the first decoder layer, we concatenate the positional embedding predicted from

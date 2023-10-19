@@ -84,8 +84,10 @@ class MTRInference():
         Returns:
             final_pred_dicts List(dict): The output of the model.
         '''
-
-        batch_pred_dicts = self.model(batch_dict)
+        self.model.eval()
+        with torch.no_grad():
+            batch_pred_dicts = self.model(batch_dict)
+        print(batch_pred_dicts.keys())
         batch_pred_dicts = self.generate_prediction_dicts(batch_pred_dicts)
         return batch_pred_dicts
         
@@ -143,12 +145,11 @@ class MTRInference():
         plot_signal(dynamic_map_infos, t, ax)
 
         track_infos = info['track_infos']
-        
-        for prediction in final_pred_dicts:
-            pred_trajs = prediction['pred_trajs']
-            pred_scores = prediction['pred_scores']
-            for future, score in zip(pred_trajs, pred_scores):
-                ax.plot(future[:, 0], future[:, 1], color='xkcd:russet', linewidth=2, linestyle='-', alpha=score*0.7+0.3, zorder=2)
+        pred_trajs = final_pred_dicts['pred_trajs_world']
+        pred_scores = final_pred_dicts['pred_scores'].cpu().numpy()
+        for pred_traj, score in zip(pred_trajs, pred_scores):     
+            for future, s in zip(pred_traj, score):
+                ax.plot(future[:, 0], future[:, 1], color='xkcd:russet', linewidth=2, linestyle='-', alpha=s*0.7+0.3, zorder=2)
         
         for obj_idx in info['tracks_to_predict']['track_index']:
             plot_traj_with_speed([track_infos['object_type'][obj_idx]], [track_infos['trajs'][obj_idx][:t]], ax=ax, fig=fig,)

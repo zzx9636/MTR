@@ -61,11 +61,11 @@ MODEL:
         CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_FUTURE_FRAMES: 80
-        NUM_MOTION_MODES: 64
+        NUM_MOTION_MODES: 16
 
         INTENTION_POINTS_FILE: data/waymo/cluster_64_center_dict.pkl
 
-        D_MODEL: 512
+        D_MODEL: 256
         NUM_DECODER_LAYERS: 3 
         NUM_ATTN_HEAD: 8
         MAP_D_MODEL: 256

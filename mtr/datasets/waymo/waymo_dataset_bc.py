@@ -23,9 +23,7 @@ class WaymoDatasetBC(DatasetTemplate):
         self.infos = self.get_all_infos(self.data_root / self.dataset_cfg.INFO_FILE[self.mode])
         if self.logger is not None:
             self.logger.info(f'Total scenes after filters: {len(self.infos)}')
-            
-        self.sample_times = 10
-            
+                        
     def filter_info_by_object_type(self, infos, valid_object_types=None):
         ret_infos = []
         for cur_info in infos:
@@ -67,10 +65,9 @@ class WaymoDatasetBC(DatasetTemplate):
         return infos
 
     def __len__(self):
-        return len(self.infos)*self.sample_times
+        return len(self.infos)
 
     def __getitem__(self, index):
-        index = int(index/self.sample_times)
         scene_id, info = self.load_info(index)
         start = info['current_time_index']
         end = len(info['timestamps_seconds'])-1
