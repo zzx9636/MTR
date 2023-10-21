@@ -84,6 +84,12 @@ class WaymoDatasetBC(DatasetTemplate):
         with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
             info = pickle.load(f)
         return scene_id, info
+    
+    def getdata(self, index, current_time_index):
+        scene_id, info = self.load_info(index)    
+        ret_dict = self.extract_scene_data(scene_id, info, current_time_index)
+        ret_dict['t_sample'] = np.array([current_time_index for _ in range(len(ret_dict['track_index_to_predict']))])
+        return ret_dict
         
     def extract_scene_data(self, scene_id, info, current_time_index):
 
@@ -364,10 +370,13 @@ class WaymoDatasetBC(DatasetTemplate):
         object_heading_embedding[:, :, :, 0] = np.sin(obj_trajs[:, :, :-1, 6])
         object_heading_embedding[:, :, :, 1] = np.cos(obj_trajs[:, :, :-1, 6])
 
-        vel = obj_trajs[:, :, 1:, 7:9]  # (num_centered_objects, num_objects, num_timestamps, 2)
-        vel_pre = obj_trajs[:,:, :-1, 7:9]
+        # vel = obj_trajs[:, :, 1:, 7:9]  # (num_centered_objects, num_objects, num_timestamps, 2)
+        # vel_pre = obj_trajs[:,:, :-1, 7:9]
+        vel = obj_trajs[:,:, :-1, 7:9]
+        vel_pre = np.roll(vel, shift=1, axis=2)
         acce = (vel - vel_pre) / 0.1  # (num_centered_objects, num_objects, num_timestamps, 2)
-
+        acce[:, :, 0, :] = acce[:, :, 1, :]
+        
         ret_obj_trajs = torch.cat((
             obj_trajs[:, :, :-1, 0:6], 
             object_onehot_mask,

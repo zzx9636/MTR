@@ -187,7 +187,7 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
         gradient_clip_val=0.5, gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
-                dirpath = 'output/bc',
+                dirpath = 'output/bc_full_residual_fix_accel',
                 save_top_k=10,
                 save_last=True,
                 monitor='val/loss_total', 

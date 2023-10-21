@@ -196,12 +196,19 @@ class MTREnv:
     
     def get_interested_index(self):
         # Get interested objects
-        self.track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
-        center_objects_mask = np.zeros(self.obj_trajs_gt.shape[0], dtype = np.bool)
-        center_objects_mask[self.track_index_to_predict] = True
-        current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
-        center_objects_mask = np.logical_and(center_objects_mask, current_valid)
-        self.track_index_to_predict = np.argwhere(center_objects_mask).reshape(-1)
+        track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
+        
+        track_index_to_predict_selected = []
+        
+        for obj_idx in track_index_to_predict:
+            obj_type = self.obj_types[obj_idx]
+            if obj_type != 'TYPE_VEHICLE':
+                continue
+            if not self.obj_trajs_gt[obj_idx, self.current_time_index, -1]>0:
+                continue
+            track_index_to_predict_selected.append(obj_idx)
+            
+        self.track_index_to_predict = np.array(track_index_to_predict_selected)
         
     def get_all_index(self):
         current_valid = self.obj_trajs_gt[:, self.current_time_index, -1]
@@ -287,7 +294,7 @@ class MTREnv:
         begin_idx = end_idx - self.history_length
         
         obj_trajs_past = np.copy(self.obj_trajs_sim[:, begin_idx:end_idx])
-        obj_trajs_past[:, :-1] = 0
+        # obj_trajs_past[:, :-1] = 0
         center_objects = obj_trajs_past[self.track_index_to_predict, -1]
         
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
@@ -307,7 +314,7 @@ class MTREnv:
         # (num_center_objects, num_topk_polylines, num_points_each_polyline)
         map_polylines_data, map_polylines_mask, map_polylines_center = self.dataset.create_map_data_for_center_objects(
                 center_objects=center_objects, map_infos=self.map_infos,
-                center_offset=(30.0, 0), # !Hardcoded
+                center_offset=(0, 0), # !Hardcoded
             )   
         
         ret_dict = {
@@ -586,6 +593,11 @@ class MTREnv:
         ).reshape(num_center_objects, num_objects, num_timestamps, 2)
 
         obj_trajs[:, :, :, heading_index] -= center_heading[:, None, None]
+        
+        obj_trajs[:, :, :, heading_index] = np.arctan2(
+            np.sin(obj_trajs[:, :, :, heading_index]),
+            np.cos(obj_trajs[:, :, :, heading_index])
+        )
 
         # rotate direction of velocity
         if rot_vel_index is not None:

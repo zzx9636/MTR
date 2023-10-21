@@ -23,6 +23,7 @@ class SimpleBCDecoder(nn.Module):
         self.model_cfg = config
         self.num_motion_modes = self.model_cfg.NUM_MOTION_MODES
         self.d_model = self.model_cfg.D_MODEL
+        self.num_decoder_layer = self.model_cfg.NUM_DECODER_LAYERS
         
         
         self.input_proj = nn.Sequential(
@@ -31,27 +32,19 @@ class SimpleBCDecoder(nn.Module):
             nn.Linear(self.d_model, self.d_model),
         )
         
-        # Create a place holder for the motion query
-        self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
-
-        self.query_mlps = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model),
-            nn.ReLU(),
-            nn.Linear(self.d_model, self.d_model),
-        )
-
-        # define the motion head
-        self.query_feature_fusion_layers = common_layers.build_mlps(c_in=self.d_model*2,
-                                                                    mlp_channels=[self.d_model, self.d_model], 
-                                                                    without_norm=False,
-                                                                    ret_before_act=False,
-                                                                    activation='leaky_relu')
+        mlp = common_layers.build_mlps(c_in=self.d_model,
+                                        mlp_channels=[self.d_model, self.d_model],
+                                        without_norm=True,
+                                        ret_before_act=False)
+        
+        self.mlp_list = nn.ModuleList([copy.deepcopy(mlp) for _ in range(self.num_decoder_layer)])
+        
+  
 
         self.prediction_head = common_layers.build_mlps(c_in=self.d_model, 
-                                                        mlp_channels=[self.d_model, self.d_model, self.d_model, 10*self.num_motion_modes], 
-                                                        without_norm=False,
-                                                        ret_before_act=True,
-                                                        activation='leaky_relu')
+                                                        mlp_channels=[self.d_model, self.d_model, 7*self.num_motion_modes], 
+                                                        without_norm=True,
+                                                        ret_before_act=True)
         
         self.register_buffer('output_mean', torch.tensor([7.26195561e-01, 1.52434988e-03, 7.25015970e-04]))
         self.register_buffer('output_std', torch.tensor([0.54773382, 0.02357974, 0.04607823]))
@@ -93,8 +86,8 @@ class SimpleBCDecoder(nn.Module):
         return mode, mix, gmm
     
     def get_loss(self, tb_pre_tag=''):
-        # return self.get_loss_best(tb_pre_tag)
-        return self.get_loss_gmm(tb_pre_tag)
+        return self.get_loss_best(tb_pre_tag)
+        # return self.get_loss_gmm(tb_pre_tag)
 
     def get_loss_best(self, tb_pre_tag=''):
         tb_dict = {}
@@ -171,23 +164,18 @@ class SimpleBCDecoder(nn.Module):
         self.forward_ret_dict['input_mean'] = center_objects_feature.mean()
         self.forward_ret_dict['input_std'] = center_objects_feature.std()
 
-        center_objects_feature = self.input_proj(center_objects_feature)#[:, None, :].repeat(1, self.num_motion_modes, 1)
+        center_objects_feature = self.input_proj(center_objects_feature).view(-1, self.d_model)
         
         self.forward_ret_dict['feature_mean'] = center_objects_feature.mean()
         self.forward_ret_dict['feature_std'] = center_objects_feature.std()
         
-        # # Process the query
-        # # self.query.register_hook(print)
-        # query_embed = self.query# self.query_mlps(self.query)  # (Q, C)
-        # print("query_embed", query_embed.mean(), query_embed.std())
-        # # Fuse the query and the center objects feature
-        # center_objects_feature = torch.cat([center_objects_feature, query_embed[None, :, :].repeat(num_center_objects, 1, 1)], dim=-1)
-        # center_objects_feature = center_objects_feature.view(num_center_objects*self.num_motion_modes, -1)
-        # center_objects_feature = self.query_feature_fusion_layers(center_objects_feature)
-        
+        for mlp in self.mlp_list:
+            # residual connection
+            center_objects_feature = mlp(center_objects_feature) + center_objects_feature
         
         prediction = self.prediction_head(center_objects_feature)
-        prediction = prediction.view(num_center_objects, self.num_motion_modes, 10)
+        
+        prediction = prediction.view(num_center_objects, self.num_motion_modes, -1)
         
         # Generate 9D Control
         # [dx, dy, dtheta, sigma_x, signa_y, sigma_theta, rho_xy, rho_xtheta, rho_ytheta]
