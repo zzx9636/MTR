@@ -126,8 +126,10 @@ class MTR_Lightning(pl.LightningModule):
         self.eval()
         with torch.no_grad():
             batch_dict = self.model(batch, get_loss=False)
-            pred_scores = batch_dict['pred_scores']
-            pred_ctrls = batch_dict['pred_ctrls']
+            # pred_scores = batch_dict['pred_scores']
+            # pred_ctrls = batch_dict['pred_ctrls']
+            # print(len(batch_dict['pred_list']))
+            pred_ctrls, pred_scores = batch_dict['pred_list'][-1]
             mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
             sample = gmm.sample()#.cpu().numpy()
@@ -174,9 +176,12 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
     
     model = MTR_Lightning(cfg, logger, pretrained_model, freeze_pretrained)
     
-    logger = WandbLogger(project='MTR_BC', entity='zzx9636', log_model = True)
+    logger = WandbLogger(project='MTR_BC_ATTEN', entity='zzx9636', log_model = True)
     logger.watch(model, log_freq=100)
+    
     # logger = None
+    num_decoder = cfg.MODEL.MOTION_DECODER.NUM_DECODER_LAYERS
+    freeze_str = 'freeze' if freeze_pretrained else 'unfreeze'
     
     trainer = pl.Trainer(
         max_epochs=epochs,
@@ -187,7 +192,7 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
         gradient_clip_val=0.5, gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
-                dirpath = 'output/bc_full_residual_fix_accel',
+                dirpath = f'output/bc_atten_{num_decoder}_{freeze_str}',
                 save_top_k=10,
                 save_last=True,
                 monitor='val/loss_total', 
@@ -201,9 +206,9 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
     
 if __name__ == '__main__':
     train(
-        'tools/cfgs/waymo/bc+10_percent_data.yaml',
+        'tools/cfgs/waymo/bc+10_percent_data_atten.yaml',
         'model/checkpoint_epoch_30.pth',
-        False
+        True
     )
 
          

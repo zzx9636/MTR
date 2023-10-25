@@ -1,6 +1,6 @@
 from typing import Any, Union, Dict, List, Optional
 import numpy as np
-from mtr.datasets.waymo.waymo_dataset import WaymoDataset
+from mtr.datasets.waymo.waymo_dataset_bc import WaymoDatasetBC as WaymoDataset
 from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose
 from mtr.utils import common_utils
 import torch
@@ -10,7 +10,7 @@ class BatchMTREnv:
         num_envs: int,
         dataset: WaymoDataset,
         random_gen = np.random.default_rng(),
-        max_step: int = 200,
+        max_step: int = 100,
     ) -> None:
         
         self.num_envs = num_envs
@@ -27,17 +27,19 @@ class BatchMTREnv:
         else:
             assert reset_bool.shape == (self.num_envs,)
         
-        # if reset_bool.sum() > 0 and self.batch_scene_data is not None:
-        batch_list = []
+        # if reset_bool.sum() > 0 and self.batch_sim_data is not None:
         for env, do_rest in zip(self.envs_list, reset_bool):
             if do_rest:
-                batch_list.append(env.reset(no_sdc = no_sdc))
-            else:
-                batch_list.append(env.scene_data)
+                env.reset(no_sdc = no_sdc)
         
     @property
-    def batch_scene_data(self):
-        batch_list = [x.scene_data for x in self.envs_list]
+    def batch_sim_data(self):
+        batch_list = [x.sim_data for x in self.envs_list]
+        return self.__collate_batch__(batch_list)
+    
+    @property
+    def batch_train_data(self):
+        batch_list = [x.train_data for x in self.envs_list]
         return self.__collate_batch__(batch_list)
             
     def visualize(self, index: Union[int, List] = None, batch_dict: Dict = None, auto_zoom: int = 20):
@@ -51,9 +53,9 @@ class BatchMTREnv:
         
         ax_list = []
         fig_list = []
-        batch_scene_data = self.batch_scene_data
+        batch_sim_data = self.batch_sim_data
         for i in index:
-            env_mask = batch_scene_data['batch_env_idx'] == i
+            env_mask = (batch_sim_data['batch_env_idx'] == i)
             pred_trajs_world = None if batch_dict is None else batch_dict['pred_trajs_world'][env_mask]
             pred_scores = None if batch_dict is None else batch_dict['pred_scores'][env_mask].cpu().numpy()
             fig, ax = self.envs_list[i].visualize(pred_trajs = pred_trajs_world, 
@@ -116,18 +118,17 @@ class BatchMTREnv:
             }
         return batch_dict
     
-    def step(self, rel_se2: np.ndarray):
+    def step(self, data, rel_se2: np.ndarray):
         '''
         Input:
             rel_se2: (num_envs, 3)
         '''
-        batch_scene_data = self.batch_scene_data
         reset_bool = np.zeros(self.num_envs, dtype = np.bool)
         for i, env in enumerate(self.envs_list):
-            env_mask = batch_scene_data['batch_env_idx'] == i
+            env_mask = data['batch_env_idx'] == i
             rel_se2_i = rel_se2[env_mask]
-            _, _, reset_bool[i], _ = env.step(rel_se2_i)
-        return self.batch_scene_data
+            reset_bool[i] = env.step(rel_se2_i)
+        return reset_bool
     
 class MTREnv:
     def __init__(
@@ -157,6 +158,7 @@ class MTREnv:
         self.history_length = self.current_time_index + 1
         self.sdc_track_index = None if no_sdc else self.info['sdc_track_index']
         self.history_timestamps = np.array(self.info['timestamps_seconds'][:self.history_length])
+        self.raw_data_length = len(self.info['timestamps_seconds'])
         self.dt = self.history_timestamps[1] - self.history_timestamps[0]
 
         # Load the GT trajectories
@@ -173,10 +175,9 @@ class MTREnv:
             obj_trajs_full_shift[:, :-shift,:] = self.obj_trajs_gt[:, shift:,:]
             self.obj_trajs_gt = obj_trajs_full_shift
             
-        self.num_objects = self.obj_trajs_gt.shape[0]
+        self.num_objects = self.obj_trajs_gt.shape[0]        
         self.obj_trajs_sim = np.zeros((self.num_objects, self.max_timestamp, 10))
-        self.obj_trajs_sim[:, :self.history_length] \
-            = self.obj_trajs_gt[:, :self.history_length]
+        self.obj_trajs_sim[:, :self.raw_data_length] = self.obj_trajs_gt
         
         # Get Map information
         self.map_infos= self.info['map_infos']
@@ -190,10 +191,6 @@ class MTREnv:
         self.center_objects_id = np.array(track_infos['object_id'])[self.track_index_to_predict]
         self.center_objects_type = np.array(track_infos['object_type'])[self.track_index_to_predict]
         
-        self.scene_data = self.extract_scene_data()
-        
-        return self.scene_data
-    
     def get_interested_index(self):
         # Get interested objects
         track_index_to_predict = np.array(self.info['tracks_to_predict']['track_index'])
@@ -225,12 +222,12 @@ class MTREnv:
         self.step_control(rel_se2)
         self.current_time_index += 1
         
-        self.scene_data = self.extract_scene_data()
-        self.reward = self.get_reward()
+        # self.scene_data = self.extract_scene_data()
+        # self.reward = self.get_reward()
         self.done = self.check_done()
         # self.info = self.get_info()
         
-        return self.scene_data, self.reward, self.done, None
+        return self.done
         
     def step_control(self, rel_se2: np.ndarray):
         '''
@@ -288,7 +285,71 @@ class MTREnv:
         time_exceed = self.current_time_index >= self.max_timestamp
         return time_exceed
     
-    def extract_scene_data(self):
+    @property
+    def train_data(self,):
+        sdc_track_index = self.sdc_track_index
+        history_length = self.history_length
+        timestamps = np.float32(self.history_timestamps)
+        
+        obj_types = self.obj_types
+        obj_ids = self.obj_ids
+                
+        obj_trajs_raw = np.copy(self.obj_trajs_sim[:, :self.raw_data_length])
+        
+        center_objects, traj_window, track_index_to_predict = self.dataset.get_interested_agents(
+            track_index_to_predict=self.track_index_to_predict,
+            obj_trajs_raw=obj_trajs_raw,
+            obj_types = obj_types,
+            current_time_index=self.current_time_index,
+            history_length=history_length,
+        )
+        
+        if center_objects is None:
+            return None
+        
+        (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, 
+         obj_trajs_last_pos, center_gt_trajs, center_gt_trajs_mask,
+         track_index_to_predict_new, sdc_track_index_new, obj_types, obj_ids) \
+            = self.dataset.create_agent_data_for_center_objects(
+            center_objects=center_objects, obj_trajs=traj_window, 
+            track_index_to_predict=track_index_to_predict, 
+            sdc_track_index=sdc_track_index,
+            timestamps=timestamps, obj_types=obj_types,
+            obj_ids=obj_ids
+        )
+            
+        ret_dict = {
+            'scenario_id': np.array([self.scene_id] * len(track_index_to_predict)),
+            'obj_trajs': obj_trajs_data, # centered trajectories of all objects
+            'obj_trajs_mask': obj_trajs_mask,
+            'track_index_to_predict': track_index_to_predict_new,  # Index of the objects of current center objects
+            'obj_trajs_pos': obj_trajs_pos,
+            'obj_trajs_last_pos': obj_trajs_last_pos, 
+            'obj_types': obj_types,
+            'obj_ids': obj_ids,
+
+            'center_objects_world': center_objects,
+            'center_objects_id': obj_ids[track_index_to_predict],
+            'center_objects_type': obj_types[track_index_to_predict],
+
+            'center_gt': center_gt_trajs,
+            'center_gt_mask': center_gt_trajs_mask,
+            'center_gt_trajs_src': traj_window[track_index_to_predict]
+        }
+
+        map_polylines_data, map_polylines_mask, map_polylines_center = self.dataset.create_map_data_for_center_objects(
+            center_objects=center_objects, map_infos=self.map_infos,
+            center_offset=(0, 0),
+        )   # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9), (num_center_objects, num_topk_polylines, num_points_each_polyline)
+
+        ret_dict['map_polylines'] = map_polylines_data
+        ret_dict['map_polylines_mask'] = (map_polylines_mask > 0)
+        ret_dict['map_polylines_center'] = map_polylines_center
+
+        return ret_dict
+        
+    @property
+    def sim_data(self):
         # We only extract a fixed trailing window of the past trajectory
         end_idx = self.current_time_index + 1
         begin_idx = end_idx - self.history_length
@@ -670,8 +731,9 @@ class MTREnv:
 
         if auto_zoom>=0:
             # Zoom in to the current scene
-            valid_traj_mask = self.obj_trajs_sim[..., -1] > 0
-            valid_traj = self.obj_trajs_sim[valid_traj_mask]
+            temp = self.obj_trajs_sim[..., (self.current_time_index-self.history_length+1):(self.current_time_index+1), :]
+            valid_traj_mask = temp[..., -1] > 0
+            valid_traj = temp[valid_traj_mask]
             max_x = np.max(valid_traj[..., 0])+auto_zoom
             min_x = np.min(valid_traj[..., 0])-auto_zoom
             max_y = np.max(valid_traj[..., 1])+auto_zoom

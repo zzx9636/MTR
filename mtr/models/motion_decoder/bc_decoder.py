@@ -3,6 +3,7 @@
 # Written by Shaoshuai Shi 
 # All Rights Reserved
 
+from typing import Optional, List
 
 import copy
 import pickle
@@ -10,13 +11,177 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mtr.models.utils.transformer import transformer_decoder_layer
+from mtr.models.utils.transformer import transformer_decoder_layer, multi_head_attention
 from mtr.models.utils.transformer import position_encoding_utils
 from mtr.models.utils import common_layers
 from mtr.utils import common_utils, loss_utils, motion_utils
 from mtr.config import cfg
 from torch.distributions import MultivariateNormal, MixtureSameFamily, Categorical
 
+
+class TransformerDecoder(nn.Module):
+    def __init__(self, d_model, n_head, dim_feedforward=2048, dropout=0.1,
+                 activation="relu", normalize_before=False, with_self_atten = True) -> None:
+        super().__init__()
+        if activation == "relu":
+            self.activation = nn.ReLU
+        elif activation == "gelu":
+            self.activation = nn.GELU
+        else:
+            self.activation = nn.LeakyReLU
+            
+        self.n_head = n_head
+        self.normalize_before = normalize_before
+        self.with_self_atten = with_self_atten
+        
+        if self.normalize_before:
+            template = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model),
+            )
+            # In the pre-norm case, follows the order of norm -> FFN -> dropout -> add
+            self.ffn = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, dim_feedforward),
+                self.activation(),
+                nn.Linear(dim_feedforward, d_model),
+                nn.Dropout(dropout),
+            )
+            
+        else:
+            template = nn.Linear(d_model, d_model)
+            # In the original paper, follows the order of FFN -> dropout -> add -> norm
+            self.ffn = nn.Sequential(
+                nn.Linear(d_model, dim_feedforward),
+                self.activation(),
+                nn.Linear(dim_feedforward, d_model),
+                nn.Dropout(dropout),
+            )
+            if self.with_self_atten:
+                self.sa_post_norm = nn.LayerNorm(d_model)
+            self.ca_post_norm = nn.LayerNorm(d_model)
+            self.ffn_post_norm = nn.LayerNorm(d_model)
+            
+        if self.with_self_atten:    
+            self.sa_q_proj = copy.deepcopy(template)
+            self.sa_q_pos_proj = copy.deepcopy(template)
+            self.sa_k_proj = copy.deepcopy(template)
+            self.sa_k_pos_proj = copy.deepcopy(template)
+            self.sa_v_proj = copy.deepcopy(template)
+        
+        self.ca_q_proj = copy.deepcopy(template)
+        self.ca_q_pos_proj = copy.deepcopy(template)
+        self.ca_k_proj = copy.deepcopy(template)
+        self.ca_k_pos_proj = copy.deepcopy(template)
+        self.ca_v_proj = copy.deepcopy(template)
+            
+        if self.with_self_atten:
+            self.self_atten = multi_head_attention.MultiheadAttention(
+                embed_dim=d_model, num_heads=n_head, dropout=dropout, vdim=d_model, without_weight=True
+            )
+            self.self_atten_dropout = nn.Dropout(dropout)
+        
+        self.cross_atten = multi_head_attention.MultiheadAttention(
+            embed_dim=2*d_model, num_heads=n_head, dropout=dropout, vdim=d_model, without_weight=True
+        )
+        self.cross_atten_dropout = nn.Dropout(dropout)
+        
+        self._reset_parameters()
+        
+    def _reset_parameters(self):    
+        # init weights
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+                
+    def multi_head_concat(self, embed, pos_embed):
+        N, B, D = embed.shape
+        embed = embed.view(N, B, self.n_head, D // self.n_head)
+        pos_embed = pos_embed.view(N, B, self.n_head, D // self.n_head)
+        embed_concat = torch.cat([embed, pos_embed], dim=-1)
+        embed_concat = embed_concat.view(N, B, -1)
+        return embed_concat
+                
+    def forward(self, tgt, memory,
+                tgt_mask: Optional[torch.Tensor] = None,
+                memory_mask: Optional[torch.Tensor] = None,
+                tgt_pos: Optional[torch.Tensor] = None,
+                memory_pos: Optional[torch.Tensor] = None,
+                memory_key_padding_mask: Optional[torch.Tensor]=None,
+    ):
+        '''
+        Args:
+            tgt (num_query, B, C): This is the query
+            memory (M, B, C): Key and value
+            tgt_mask (num_query, B): Mask for the query
+            memory_mask (M, B): Mask for the key and value
+            query_pos (num_query, B, C): Positional embedding of the query 
+            memory_pos (M, B, C): Positional embedding of the key and value
+            memory_key_padding_mask (M, B): Mask for the key and value
+        '''
+        if self.with_self_atten:
+            # q_sub = self.multi_head_concat(self.sa_q_proj(tgt), self.sa_q_pos_proj(tgt_pos))
+            # k_sub = self.multi_head_concat(self.sa_k_proj(tgt), self.sa_k_pos_proj(tgt_pos))
+            q_sub = self.sa_q_proj(tgt)
+            k_sub = self.sa_k_proj(tgt)
+            v_sub = self.sa_v_proj(tgt)
+
+            tgt_sub = self.self_atten(q_sub, k_sub, value = v_sub,
+                                      attn_mask=tgt_mask, key_padding_mask=None)[0]
+            tgt = tgt + self.self_atten_dropout(tgt_sub)
+            if not self.normalize_before:
+                tgt = self.sa_post_norm(tgt)
+        
+        # Cross Attention
+        q_sub = self.multi_head_concat(self.ca_q_proj(tgt), self.ca_q_pos_proj(tgt_pos))
+        # q_sub = self.ca_q_proj(tgt)
+        k_sub = self.multi_head_concat(self.ca_k_proj(memory), self.ca_k_pos_proj(memory_pos))
+        # k_sub = self.ca_k_proj(memory) + self.ca_k_pos_proj(memory_pos)
+        v_sub = self.ca_v_proj(memory)
+        
+        tgt_sub = self.cross_atten(q_sub, k_sub, value = v_sub,
+                                   attn_mask=memory_mask, key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.cross_atten_dropout(tgt_sub)
+        if not self.normalize_before:
+            tgt = self.ca_post_norm(tgt)
+        
+        # FFN
+        tgt = tgt+self.ffn(tgt_sub)
+        if not self.normalize_before:
+            tgt = self.ffn_post_norm(tgt)
+            
+        return tgt
+
+class ResidualMLP(nn.Module):
+    def __init__(self, c_in, c_out, num_mlp=4, without_norm = True) -> None:
+        super().__init__()
+        assert num_mlp >= 1
+        
+        self.mlp_list = nn.ModuleList(
+            [
+                common_layers.build_mlps(
+                    c_in=c_in,
+                    mlp_channels=[c_in, c_in],
+                    without_norm=without_norm,
+                    ret_before_act=True
+                )
+                for _ in range(num_mlp)
+            ]
+        )
+        self.out_mlp = common_layers.build_mlps(
+            c_in=c_in,
+            mlp_channels=[c_in, c_out],
+            without_norm=without_norm,
+            ret_before_act=True
+        )
+        
+    def forward(self, x):
+        original_shape = x.shape
+        x = x.view(-1, original_shape[-1])
+        for mlp in self.mlp_list:
+            x = x + mlp(x)
+        return self.out_mlp(x).view(*original_shape[:-1], -1)
+                         
 class BCDecoder(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
@@ -26,220 +191,78 @@ class BCDecoder(nn.Module):
         self.num_motion_modes = self.model_cfg.NUM_MOTION_MODES
         self.use_place_holder = self.model_cfg.get('USE_PLACE_HOLDER', False)
         self.d_model = self.model_cfg.D_MODEL
+        self.n_head = self.model_cfg.NUM_ATTN_HEAD
+        self.dropout = self.model_cfg.get('DROPOUT_OF_ATTN', 0.1)
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
-
-        # define the cross-attn layers
+        self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
+        self.use_local_attn = self.model_cfg.get('USE_LOCAL_ATTN', False)
+        
+        # Build the query
+        self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
+        
+        # Project the input to a higher dimension
         self.in_proj_center_obj = nn.Sequential(
             nn.Linear(in_channels, self.d_model),
             nn.ReLU(),
             nn.Linear(self.d_model, self.d_model),
         )
-        self.in_proj_obj, self.obj_decoder_layers = self.build_transformer_decoder(
-            in_channels=in_channels,
-            d_model=self.d_model,
-            nhead=self.model_cfg.NUM_ATTN_HEAD,
-            dropout=self.model_cfg.get('DROPOUT_OF_ATTN', 0.1),
-            num_decoder_layers=self.num_decoder_layers,
-            use_local_attn=False
-        )
-
-        map_d_model = self.model_cfg.get('MAP_D_MODEL', self.d_model)
-        self.in_proj_map, self.map_decoder_layers = self.build_transformer_decoder(
-            in_channels=in_channels,
-            d_model=map_d_model,
-            nhead=self.model_cfg.NUM_ATTN_HEAD,
-            dropout=self.model_cfg.get('DROPOUT_OF_ATTN', 0.1),
-            num_decoder_layers=self.num_decoder_layers,
-            use_local_attn=False
-        )
-        if map_d_model != self.d_model:
-            temp_layer = nn.Linear(self.d_model, map_d_model)
-            self.map_query_content_mlps = nn.ModuleList([copy.deepcopy(temp_layer) for _ in range(self.num_decoder_layers)])
-            self.map_query_embed_mlps = nn.Linear(self.d_model, map_d_model)
-        else:
-            self.map_query_content_mlps = [None for _ in range(self.num_decoder_layers)]
-            self.map_query_embed_mlps = None
-            
-        # Create a place holder for the motion query
-        self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
-
-        self.query_mlps = nn.Sequential(
-            nn.Linear(self.d_model, self.d_model),
+        
+        self.in_proj_obj = nn.Sequential(
+            nn.Linear(in_channels, self.d_model),
             nn.ReLU(),
             nn.Linear(self.d_model, self.d_model),
         )
-        # self.query_layer_norm = nn.LayerNorm(self.d_model)
-
-        # define the motion head
-        temp_layer = common_layers.build_mlps(c_in=self.d_model * 2 + map_d_model, mlp_channels=[self.d_model, self.d_model], ret_before_act=True)
-        self.query_feature_fusion_layers = nn.ModuleList([copy.deepcopy(temp_layer) for _ in range(self.num_decoder_layers)])
-
-        self.motion_reg_heads, self.motion_cls_heads = self.build_motion_head(
-            in_channels=self.d_model, hidden_size=self.d_model, num_decoder_layers=self.num_decoder_layers
+        
+        self.in_proj_map = nn.Sequential(
+            nn.Linear(in_channels, self.d_model),
+            nn.ReLU(),
+            nn.Linear(self.d_model, self.d_model),
         )
+        
+        # Query Fusion
+        self.pre_query_fusion_layer = nn.Sequential(
+            nn.Linear(self.d_model*2, self.d_model),
+            nn.ReLU(),
+            nn.Linear(self.d_model, self.d_model),
+        ) 
+        
+        if self.num_decoder_layers > 0:
+            # Attention        
+            self.obj_atten_layers = nn.ModuleList([
+                TransformerDecoder(
+                    d_model=self.d_model, n_head=self.n_head,
+                    dim_feedforward=self.d_model*4, dropout=self.dropout, 
+                    with_self_atten=False, normalize_before=True
+                ) for _ in range(self.num_decoder_layers)
+                ])
+            
+            self.map_atten_layers = nn.ModuleList([TransformerDecoder(
+                    d_model=self.d_model, n_head=self.n_head,
+                    dim_feedforward=self.d_model*4, dropout=self.dropout,
+                    with_self_atten=False, normalize_before=True
+                ) for _ in range(self.num_decoder_layers)])
+            
+           
+            self.query_fusion_layers = nn.ModuleList([nn.Sequential(
+                nn.Linear(self.d_model*3, self.d_model),
+                nn.ReLU(),
+                nn.Linear(self.d_model, self.d_model),
+            ) for _ in range(self.num_decoder_layers)]) 
+            
+        
+        # Prediction Head
+        self.prediction_layers = nn.ModuleList([ResidualMLP(
+                c_in = self.d_model,
+                c_out = 10,
+                num_mlp = 4,
+                without_norm = True       
+            ) for _ in range(self.num_decoder_layers+1)])
         
         self.register_buffer('output_mean', torch.tensor([7.26195561e-01, 1.52434988e-03, 7.25015970e-04]))
         self.register_buffer('output_std', torch.tensor([0.54773382, 0.02357974, 0.04607823]))
         
         self.forward_ret_dict = {}
-
-    def build_transformer_decoder(self, in_channels, d_model, nhead, dropout=0.1, num_decoder_layers=1, use_local_attn=False):
-        in_proj_layer = nn.Sequential(
-            nn.Linear(in_channels, d_model),
-            nn.ReLU(),
-            nn.Linear(d_model, d_model),
-        )
-
-        # decoder_layer = transformer_decoder_layer.TransformerDecoderLayer(
-        #     d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, dropout=dropout,
-        #     activation="relu", normalize_before=False, keep_query_pos=False,
-        #     rm_self_attn_decoder=False, use_local_attn=use_local_attn
-        # )
-        decoder_layers = nn.ModuleList([transformer_decoder_layer.TransformerDecoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, dropout=dropout,
-            activation="relu", normalize_before=False, keep_query_pos=False,
-            rm_self_attn_decoder=(i==0), use_local_attn=use_local_attn
-        ) for i in range(num_decoder_layers)])
-        return in_proj_layer, decoder_layers
-
-    def build_motion_head(self, in_channels, hidden_size, num_decoder_layers):
-        motion_reg_head =  common_layers.build_mlps(
-            c_in=in_channels,
-            mlp_channels=[hidden_size, hidden_size,  9], ret_before_act=True
-        )
-        motion_cls_head =  common_layers.build_mlps(
-            c_in=in_channels,
-            mlp_channels=[hidden_size, hidden_size, 1], ret_before_act=True
-        )
-
-        motion_reg_heads = nn.ModuleList([copy.deepcopy(motion_reg_head) for _ in range(num_decoder_layers)])
-        motion_cls_heads = nn.ModuleList([copy.deepcopy(motion_cls_head) for _ in range(num_decoder_layers)])
-        return motion_reg_heads, motion_cls_heads
-
-    def apply_cross_attention(self, kv_feature, kv_mask, kv_pos, query_content, query_embed, attention_layer,
-                              dynamic_query_center=None, layer_idx=0, use_local_attn=False, query_index_pair=None,
-                              query_content_pre_mlp=None, query_embed_pre_mlp=None):
-        """
-        Args:
-            kv_feature (B, N, C): Key and Value feature
-            kv_mask (B, N): Key and Value mask
-            kv_pos (B, N, 3): Ego centric x-y position of Key and Value. This is used for positional encoding.
-            query_content (M, B, C): # Query feature
-            query_embed (M, B, C): # Query positional embedding 
-            attention_layer (layer): nn.Module Attention layer to be used.
-            dynamic_query_center (M, B, 2): . Ego centric x-y position of query center. This is used for positional encoding.
-            layer_idx: int. Defaults to 0.
-            use_local_attn (bool): Whether to use local attention. Defaults to False.
-            query_index_pair (B, M, K)
-
-        Returns:
-            attended_features: (B, M, C)
-            attn_weights:
-        """
-        if query_content_pre_mlp is not None:
-            query_content = query_content_pre_mlp(query_content)
-        if query_embed_pre_mlp is not None:
-            query_embed = query_embed_pre_mlp(query_embed)
-        
-        # These two positional embeddings are used for the cross attention, should be aligned 
-        num_q, batch_size, d_model = query_content.shape
-        searching_query = position_encoding_utils.gen_sineembed_for_position(dynamic_query_center, hidden_dim=d_model)
-        kv_pos = kv_pos.permute(1, 0, 2)[:, :, 0:2]
-        kv_pos_embed = position_encoding_utils.gen_sineembed_for_position(kv_pos, hidden_dim=d_model)
-        
-        if not use_local_attn:
-            query_feature = attention_layer(
-                tgt=query_content,
-                query_pos=query_embed,
-                query_sine_embed=searching_query,
-                memory=kv_feature.permute(1, 0, 2),
-                memory_key_padding_mask=~kv_mask,
-                pos=kv_pos_embed,
-                is_first=(layer_idx == 0)
-            )  # (M, B, C)
-        else:
-            batch_size, num_kv, _ = kv_feature.shape
-
-            kv_feature_stack = kv_feature.flatten(start_dim=0, end_dim=1)
-            kv_pos_embed_stack = kv_pos_embed.permute(1, 0, 2).contiguous().flatten(start_dim=0, end_dim=1)
-            kv_mask_stack = kv_mask.view(-1)
-
-            key_batch_cnt = num_kv * torch.ones(batch_size).int().to(kv_feature.device)
-            query_index_pair = query_index_pair.view(batch_size * num_q, -1)
-            index_pair_batch = torch.arange(batch_size).type_as(key_batch_cnt)[:, None].repeat(1, num_q).view(-1)  # (batch_size * num_q)
-            assert len(query_index_pair) == len(index_pair_batch)
-
-            query_feature = attention_layer(
-                tgt=query_content,
-                query_pos=query_embed,
-                query_sine_embed=searching_query,
-                memory=kv_feature_stack,
-                memory_valid_mask=kv_mask_stack,
-                pos=kv_pos_embed_stack,
-                is_first=(layer_idx == 0),
-                key_batch_cnt=key_batch_cnt,
-                index_pair=query_index_pair,
-                index_pair_batch=index_pair_batch
-            )
-            query_feature = query_feature.view(batch_size, num_q, d_model).permute(1, 0, 2)  # (M, B, C)
-
-        return query_feature
-
-    def apply_transformer_decoder(self, center_objects_feature, query_embed, obj_feature, obj_mask, obj_pos, map_feature, map_mask, map_pos):
-        # Encoded and raw position of intention points
-        # ! TODO, use our own intention points
-        
-        query_content = torch.zeros_like(query_embed) #[Num Query, Batch, C]
-        num_center_objects = query_content.shape[1]
-        num_query = query_content.shape[0]
-        center_objects_feature = center_objects_feature[None, :, :].repeat(num_query, 1, 1)  # (num_query, num_center_objects, C)
-        dynamic_query_center = torch.zeros((num_query, num_center_objects, 2), device=query_content.device)  # (num_query, num_center_objects, 3)
-
-        pred_list = []
-        # query_embed.register_hook(print)
-        for layer_idx in range(self.num_decoder_layers):
-            # print(dynamic_query_center[:, 1, :])
-            # ! Why initial query_content is all zeros?
-            # query object feature
-            obj_query_feature = self.apply_cross_attention(
-                kv_feature=obj_feature, kv_mask=obj_mask, kv_pos=obj_pos,
-                query_content=query_content, query_embed=query_embed,
-                attention_layer=self.obj_decoder_layers[layer_idx],
-                dynamic_query_center=dynamic_query_center,
-                layer_idx=layer_idx
-            ) 
-            map_query_feature = self.apply_cross_attention(
-                kv_feature=map_feature, kv_mask=map_mask, kv_pos=map_pos,
-                query_content=query_content, query_embed=query_embed,
-                attention_layer=self.map_decoder_layers[layer_idx],
-                dynamic_query_center=dynamic_query_center,
-                layer_idx=layer_idx,
-                query_content_pre_mlp=self.map_query_content_mlps[layer_idx],
-                query_embed_pre_mlp=self.map_query_embed_mlps
-            ) 
-            query_feature = torch.cat([center_objects_feature, obj_query_feature, map_query_feature], dim=-1)
-            query_content = self.query_feature_fusion_layers[layer_idx](
-                query_feature.flatten(start_dim=0, end_dim=1)
-            ).view(num_query, num_center_objects, -1) 
-
-            # motion prediction
-            query_content_t = query_content.permute(1, 0, 2).contiguous().view(num_center_objects * num_query, -1)
-            
-            pred_scores = self.motion_cls_heads[layer_idx](query_content_t).view(num_center_objects, num_query)
-            pred_ctrls = self.motion_reg_heads[layer_idx](query_content_t).view(num_center_objects, num_query, 9)
-            
-            pred_list.append([pred_scores, pred_ctrls])
-            
-            # update
-            dynamic_query_center = pred_ctrls[:, :, :2].contiguous().permute(1, 0, 2)  # (num_query, num_center_objects, 2)
-
-        if self.use_place_holder:
-            raise NotImplementedError
-
-        assert len(pred_list) == self.num_decoder_layers
-        return pred_list
     
-
     def build_mode_distribution(self, pred_ctrl, log_std_range=(-5.0, 2.0), rho_limit=0.4):
         independent = pred_ctrl.shape[-1] == 6
     
@@ -267,70 +290,86 @@ class BCDecoder(nn.Module):
       
         return mode
     
-    
     def build_gmm_distribution(self, pred_ctrl, pred_ctrl_score, log_std_range=(-5.0, 2.0), rho_limit=0.4):
         mode = self.build_mode_distribution(pred_ctrl, log_std_range, rho_limit)
         mix = Categorical(logits=pred_ctrl_score)
         gmm = MixtureSameFamily(mix, mode)
         return mode, mix, gmm
-
+    
     def get_loss(self, tb_pre_tag=''):
+        if self.loss_mode == 'best':
+            return self.get_loss_best(tb_pre_tag)
+        else:
+            return self.get_loss_gmm(tb_pre_tag)
+
+    def get_loss_best(self, tb_pre_tag='', filter = True):
+        tb_dict = {}
+        
         center_gt = self.forward_ret_dict['center_gt'][...,None,:3].cuda()
         # normalize the gt
         center_gt = (center_gt - self.output_mean) / self.output_std
         
-        pred_list = self.forward_ret_dict['pred_list']
-        
-        tb_dict = {}
-        total_loss = 0
-        for layer_idx in range(self.num_decoder_layers):
-            
-            pred_scores, pred_ctrls = pred_list[layer_idx]
-            
+        total_loss = 0 
+        for i, (pred_ctrls, pred_scores) in enumerate(self.forward_ret_dict['pred_list']):
             # Get mode for all
             mode_all = self.build_mode_distribution(pred_ctrls) # [batch size]
-            nll_loss_all = -mode_all.log_prob(center_gt)
+            nll_loss_all = -mode_all.log_prob(center_gt)            
             nll_loss_best, best_idx = nll_loss_all.min(dim=-1)
-            # print(nll_loss_all[0])
-            # cross entropy loss
+            
+            # Filter out the noise prediction
+            if filter:
+                nll_loss_valid = nll_loss_best < 20
+                nll_loss_best = nll_loss_best[nll_loss_valid]
+                best_idx = best_idx[nll_loss_valid]
+                pred_scores = pred_scores[nll_loss_valid]
+                tb_dict[f'{tb_pre_tag}layer{i}_num_invalid'] = torch.sum(~nll_loss_valid).float().item()
+
             cls_loss = F.cross_entropy(input  = pred_scores, target= best_idx, reduction='none')
 
-            layer_loss = nll_loss_best + cls_loss
-            layer_loss = layer_loss.mean()
-            total_loss += layer_loss
-            tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()
+            layer_loss = (nll_loss_best + cls_loss).mean()
+            tb_dict[f'{tb_pre_tag}layer{i}_loss_nll'] = nll_loss_best.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_loss_cls'] = cls_loss.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_loss'] = layer_loss.item()
             
-        total_loss = total_loss / self.num_decoder_layers
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_mean'] = pred_ctrls.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_ctrls.std(dim=1).mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_score_mean'] = pred_scores.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_score_std'] = pred_scores.std(dim=1).mean().item()
+            
+            total_loss += layer_loss
+        
+        # Average over layers    
+        total_loss /= len(self.forward_ret_dict['pred_list'])
+        
+        tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
+            
         return total_loss, tb_dict
     
-    def get_loss2(self, tb_pre_tag=''):
+    def get_loss_gmm(self, tb_pre_tag=''):
+        tb_dict = {}
+        
         center_gt = self.forward_ret_dict['center_gt'][...,:3].cuda()
         # normalize the gt
         center_gt = (center_gt - self.output_mean) / self.output_std
         
-        pred_list = self.forward_ret_dict['pred_list']
+        pred_ctrls = self.forward_ret_dict['pred_ctrls']
+        pred_scores = self.forward_ret_dict['pred_scores']
         
-        tb_dict = {}
-        total_loss = 0
-        for layer_idx in range(self.num_decoder_layers):
-            pred_scores, pred_ctrls = pred_list[layer_idx]
-            
-            
-            _, _, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores) # [batch size]
-            
-            nll_loss = -gmm.log_prob(center_gt)
-            
-            # cross entropy loss
-            # cls_loss = F.cross_entropy(input  = pred_scores, target= best_idx, reduction='none')
+        # Get mode for all
+        _, _, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores) # [batch size]
+        nll_loss = -gmm.log_prob(center_gt)
 
-            layer_loss = nll_loss #+ cls_loss
-            layer_loss = layer_loss.mean()
-            total_loss += layer_loss
-            tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()
-            
-        total_loss = total_loss / self.num_decoder_layers
+        total_loss = nll_loss.mean()
+        tb_dict[f'{tb_pre_tag}loss_nll'] = nll_loss.mean().item()
+        tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
+        
+        # record mean and std
+        tb_dict[f'{tb_pre_tag}pred_mean'] = pred_ctrls.mean().item()
+        tb_dict[f'{tb_pre_tag}pred_std'] = pred_ctrls.std().item()
+        tb_dict[f'{tb_pre_tag}score_mean'] = pred_scores.mean().item()
+        tb_dict[f'{tb_pre_tag}score_std'] = pred_scores.std().item()
         return total_loss, tb_dict
-   
+    
     def forward(self, batch_dict):
         input_dict = batch_dict['input_dict']
         
@@ -338,45 +377,103 @@ class BCDecoder(nn.Module):
         obj_feature, obj_mask, obj_pos = batch_dict['obj_feature'], batch_dict['obj_mask'], batch_dict['obj_pos']
         map_feature, map_mask, map_pos = batch_dict['map_feature'], batch_dict['map_mask'], batch_dict['map_pos']
         center_objects_feature = batch_dict['center_objects_feature']
+        track_index_to_predict = batch_dict['track_index_to_predict']
+
         num_center_objects, num_objects, _ = obj_feature.shape
 
         num_polylines = map_feature.shape[1]
         
+        # Remove Ego agent from the object feature
+        # obj_mask[torch.arange(num_center_objects), track_index_to_predict] = False
+        
         # input projection 
         # project each feature to a higher dimension
         center_objects_feature = self.in_proj_center_obj(center_objects_feature)
+        center_objects_feature = center_objects_feature[None,...].repeat(self.num_motion_modes, 1, 1) # (1, num_center_objects, C)
+        
         obj_feature_valid = self.in_proj_obj(obj_feature[obj_mask])
         obj_feature = obj_feature.new_zeros(num_center_objects, num_objects, obj_feature_valid.shape[-1])
         obj_feature[obj_mask] = obj_feature_valid
+        obj_feature = obj_feature.permute(1, 0, 2).contiguous() # (num_objects, num_center_objects, C)
 
         map_feature_valid = self.in_proj_map(map_feature[map_mask])
         map_feature = map_feature.new_zeros(num_center_objects, num_polylines, map_feature_valid.shape[-1])
         map_feature[map_mask] = map_feature_valid
+        map_feature = map_feature.permute(1, 0, 2).contiguous() # (num_polylines, num_center_objects, C)
+        
+        # Get positional embedding of the query
+        obj_pos_embed = position_encoding_utils.gen_sineembed_for_position(
+            obj_pos.permute(1, 0, 2)[:, :, 0:2], hidden_dim=self.d_model
+        ).contiguous() # (num_objects, num_center_objects, C)
+        
+        map_pos_embed = position_encoding_utils.gen_sineembed_for_position(
+            map_pos.permute(1, 0, 2)[:, :, 0:2], hidden_dim=self.d_model
+        ).contiguous() # (num_polylines, num_center_objects, C)
+        
+        center_pos_embed = obj_pos_embed[track_index_to_predict, torch.arange(num_center_objects), :] # (num_center_objects, C)
+        center_pos_embed = center_pos_embed.unsqueeze(0).repeat(self.num_motion_modes, 1, 1) # (num_motion_modes, num_center_objects, C)
         
         # Process the query
-        # self.query.register_hook(print)
-        query_embed = self.query_mlps(self.query)  # (Q, C)
+        query_embed = self.query  # (Q, C)
         # query_embed.register_hook(print)
-        print("query:", query_embed.mean(), query_embed.std())
-        print("obj", obj_feature.mean(), obj_feature.std())
-        print("map", map_feature.mean(), map_feature.std())
-        query_embed = query_embed.unsqueeze(1).repeat(1, num_center_objects, 1)  # (Q, N, C)
+        query_embed = query_embed.unsqueeze(1).repeat(1, num_center_objects, 1)  # (num_motion_modes, num_center_objects, C)
         
-        # decoder layers
-        pred_list = self.apply_transformer_decoder(
-            center_objects_feature=center_objects_feature,
-            query_embed=query_embed,
-            obj_feature=obj_feature, obj_mask=obj_mask, obj_pos=obj_pos,
-            map_feature=map_feature, map_mask=map_mask, map_pos=map_pos,
-        )
+        query_embed = self.pre_query_fusion_layer(torch.cat([center_objects_feature, query_embed], dim=-1))
         
-        # Generate 9D Control
-        # [dx, dy, dtheta, sigma_x, signa_y, sigma_theta, rho_xy, rho_xtheta, rho_ytheta]
+        # Initialize prediction with out attention
+        prediction = self.prediction_layers[0](query_embed)
+        pred_ctrls = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+        pred_scores = prediction[..., -1].permute(1, 0).contiguous()
+        pred_list = [(pred_ctrls, pred_scores)]
+        
+        
+        for i in range(self.num_decoder_layers):
+            obj_atten = self.obj_atten_layers[i]
+            map_atten = self.map_atten_layers[i]
+            query_fuison = self.query_fusion_layers[i]
+            pred_layer = self.prediction_layers[i+1]
+            
+            obj_query_embed = obj_atten(
+                tgt = query_embed,
+                memory = obj_feature,
+                tgt_mask = None,
+                memory_mask = None,
+                tgt_pos = center_pos_embed,
+                memory_pos = obj_pos_embed,
+                memory_key_padding_mask = ~obj_mask,
+            )
+            
+            map_query_embed = map_atten(
+                tgt = query_embed,
+                memory = map_feature,
+                tgt_mask = None,
+                memory_mask = None,
+                tgt_pos = center_pos_embed,
+                memory_pos = map_pos_embed,
+                memory_key_padding_mask = ~map_mask,
+            )
+            
+            # print("query_embed", query_embed.std())
+            temp = query_fuison(
+                torch.cat([query_embed,
+                        obj_query_embed,
+                        map_query_embed
+                    ], dim=-1)) 
+            
+            # print("temp", temp.std())
+            query_embed = temp #+ query_embed
+            
+            prediction = pred_layer(query_embed)
+            
+            pred_ctrls = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+            pred_scores = prediction[..., -1].permute(1, 0).contiguous()
+            
+            pred_list.append((pred_ctrls, pred_scores))
+            
         if 'center_gt' in input_dict:
             self.forward_ret_dict['pred_list'] = pred_list
             self.forward_ret_dict['center_gt'] = input_dict['center_gt']
             # Otherwise, it is in the inference mode
             
         batch_dict['pred_list'] = pred_list
-
         return batch_dict

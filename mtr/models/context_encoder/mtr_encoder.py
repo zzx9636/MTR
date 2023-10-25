@@ -190,7 +190,8 @@ class MTREncoder(nn.Module):
         assert map_polylines_feature.shape[1] == num_polylines
         # organize return features
         center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
-
+        
+        batch_dict['track_index_to_predict'] = track_index_to_predict
         batch_dict['center_objects_feature'] = center_objects_feature
         batch_dict['obj_feature'] = obj_polylines_feature
         batch_dict['map_feature'] = map_polylines_feature
