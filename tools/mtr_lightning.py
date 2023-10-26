@@ -45,7 +45,8 @@ class MTR_Lightning(pl.LightningModule):
         '''
         
         param2opt = [param for param in self.model.parameters() if param.requires_grad]
-        
+        # print('motion_decoder.query' in param2opt)
+        # print(param2opt)
         if self.opt_cfg.OPTIMIZER == 'Adam':
             optimizer = torch.optim.Adam(
                 param2opt,
@@ -101,32 +102,38 @@ class MTR_Lightning(pl.LightningModule):
             return optimizer
         
     def training_step(self, batch, batch_idx):
+        batch_size = len(batch['input_dict']['track_index_to_predict'])
         output = self.model(batch)
         loss = output[0]
         tb_dict = output[1]
         
         log_dict = {f'train/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True)
+        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True, batch_size=batch_size)
         
         return loss
     
     def validation_step(self, batch, batch_idx):
+        batch_size = len(batch['input_dict']['track_index_to_predict'])
         output = self.model(batch)
         tb_dict = output[1]
         log_dict = {f'val/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=False, prog_bar=True, logger=True)
+        self.log_dict(log_dict, on_step=False, prog_bar=True, logger=True, batch_size=batch_size)
         
     def forward(self, batch, get_loss: bool = False):
         return self.model(batch, get_loss)
     
-    def sample(self, batch):
+    def sample(self, batch, layer = -1):
         self.eval()
         with torch.no_grad():
             batch_dict = self.model(batch, get_loss=False)
-            pred_scores, pred_ctrls = batch_dict['pred_list'][-1]
-            mode, mix, gmm = self.model.motion_decoder.build_mode_distribution(pred_ctrls, pred_scores)
+            # pred_scores = batch_dict['pred_scores']
+            # pred_ctrls = batch_dict['pred_ctrls']
+            # print(len(batch_dict['pred_list']))
+            pred_ctrls, pred_scores = batch_dict['pred_list'][layer]
+            mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
-            sample = gmm.sample().cpu().numpy()
+            sample = gmm.sample()#.cpu().numpy()
+            sample = (sample * self.model.motion_decoder.output_std + self.model.motion_decoder.output_mean).cpu().numpy()
         return mode, mix, gmm, sample
         
         
@@ -169,9 +176,12 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
     
     model = MTR_Lightning(cfg, logger, pretrained_model, freeze_pretrained)
     
-    logger = WandbLogger(project='MTR_BC', entity='zzx9636', log_model = True)
+    logger = WandbLogger(project='MTR_BC_ATTEN', entity='zzx9636', log_model = True)
     logger.watch(model, log_freq=100)
+    
     # logger = None
+    num_decoder = cfg.MODEL.MOTION_DECODER.NUM_DECODER_LAYERS
+    freeze_str = 'freeze' if freeze_pretrained else 'unfreeze'
     
     trainer = pl.Trainer(
         max_epochs=epochs,
@@ -182,9 +192,12 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
         gradient_clip_val=0.5, gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
-            dirpath = 'output/bc',
-            # save_top_k=100, 
-            save_on_train_epoch_end=True),
+                dirpath = f'output/bc_atten_{num_decoder}_{freeze_str}',
+                save_top_k=10,
+                save_last=True,
+                monitor='val/loss_total', 
+                save_on_train_epoch_end=True
+            ),
             LearningRateMonitor(logging_interval='step')
         ]
     )
@@ -193,7 +206,7 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
     
 if __name__ == '__main__':
     train(
-        'tools/cfgs/waymo/bc+10_percent_data.yaml',
+        'tools/cfgs/waymo/bc+10_percent_data_atten.yaml',
         'model/checkpoint_epoch_30.pth',
         True
     )

@@ -84,7 +84,13 @@ class WaymoDatasetBC(DatasetTemplate):
         with open(self.data_path / f'sample_{scene_id}.pkl', 'rb') as f:
             info = pickle.load(f)
         return scene_id, info
-
+    
+    def getdata(self, index, current_time_index):
+        scene_id, info = self.load_info(index)    
+        ret_dict = self.extract_scene_data(scene_id, info, current_time_index)
+        ret_dict['t_sample'] = np.array([current_time_index for _ in range(len(ret_dict['track_index_to_predict']))])
+        return ret_dict
+        
     def extract_scene_data(self, scene_id, info, current_time_index):
 
         sdc_track_index = info['sdc_track_index']
@@ -103,6 +109,7 @@ class WaymoDatasetBC(DatasetTemplate):
         center_objects, traj_window, track_index_to_predict = self.get_interested_agents(
             track_index_to_predict=track_index_to_predict,
             obj_trajs_raw=obj_trajs_raw,
+            obj_types = obj_types,
             current_time_index=current_time_index,
             history_length=history_length,
         )
@@ -210,7 +217,8 @@ class WaymoDatasetBC(DatasetTemplate):
                 center_gt_trajs_mask, track_index_to_predict_new,
                 sdc_track_index_new, obj_types, obj_ids)
 
-    def get_interested_agents(self, track_index_to_predict, obj_trajs_raw, current_time_index, history_length):
+    def get_interested_agents(self, track_index_to_predict, obj_trajs_raw, 
+                              obj_types, current_time_index, history_length):
         '''
         This function extract the current state of the objects that need to be predicted from the all objects' trajectories
         Args:
@@ -235,6 +243,10 @@ class WaymoDatasetBC(DatasetTemplate):
         traj_window = obj_trajs_raw[:, current_time_index-history_length+1:current_time_index+2, :]
         assert traj_window.shape[-2] == history_length+1
         for obj_idx in track_index_to_predict:
+            obj_type = obj_types[obj_idx]
+            if obj_type != 'TYPE_VEHICLE':
+                continue
+            
             if not np.all(traj_window[obj_idx, -2:, -1]):
                 continue
             # Check for wired missing mask cases
@@ -354,10 +366,13 @@ class WaymoDatasetBC(DatasetTemplate):
         object_heading_embedding[:, :, :, 0] = np.sin(obj_trajs[:, :, :-1, 6])
         object_heading_embedding[:, :, :, 1] = np.cos(obj_trajs[:, :, :-1, 6])
 
-        vel = obj_trajs[:, :, 1:, 7:9]  # (num_centered_objects, num_objects, num_timestamps, 2)
-        vel_pre = obj_trajs[:,:, :-1, 7:9]
+        # vel = obj_trajs[:, :, 1:, 7:9]  # (num_centered_objects, num_objects, num_timestamps, 2)
+        # vel_pre = obj_trajs[:,:, :-1, 7:9]
+        vel = obj_trajs[:,:, :-1, 7:9]
+        vel_pre = np.roll(vel, shift=1, axis=2)
         acce = (vel - vel_pre) / 0.1  # (num_centered_objects, num_objects, num_timestamps, 2)
-
+        acce[:, :, 0, :] = acce[:, :, 1, :]
+        
         ret_obj_trajs = torch.cat((
             obj_trajs[:, :, :-1, 0:6],
             object_onehot_mask,
@@ -523,11 +538,10 @@ class WaymoDatasetBC(DatasetTemplate):
                     save_file = os.path.join(save_path, f'sample_{scene_id}_{t}.pkl')
                     pickle.dump(dict2save, open(save_file, 'wb'))
 
+
 if __name__ == '__main__':
     cfg_file = 'tools/cfgs/waymo/bc+10_percent_data.yaml'
     # ckpt_path = 'output/bc/epoch=2-step=4602.ckpt'
     cfg = cfg_from_yaml_file(cfg_file, cfg)
     dataset = WaymoDatasetBC(cfg.DATA_CONFIG, training=True)
     dataset.extract_all('/Data/Dataset/MTR/Behavior_Cloning/training')
-
-

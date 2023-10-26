@@ -120,16 +120,16 @@ class MotionTransformer(nn.Module):
 
         if freeze_pretrained:
             for name, param in self.named_parameters():
-                if name not in missing_keys:
+                if name in model_state_disk:
                     param.requires_grad = False
 
         if logger is not None:
-            logger.info(f'Missing keys: {missing_keys}')
+            # logger.info(f'Missing keys: {missing_keys}')
             logger.info(f'The number of missing keys: {len(missing_keys)}')
             logger.info(f'The number of unexpected keys: {len(unexpected_keys)}')
             logger.info('==> Done (total keys %d)' % (len(model_state)))
         else:
-            print(f'Missing keys: {missing_keys}')
+            # print(f'Missing keys: {missing_keys}')
             print(f'The number of missing keys: {len(missing_keys)}')
             print(f'The number of unexpected keys: {len(unexpected_keys)}')
             print('==> Done (total keys %d)' % (len(model_state)))

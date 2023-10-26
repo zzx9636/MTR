@@ -30,7 +30,7 @@ DATA_CONFIG:
     NUM_TIME_SAMPLES: 5
 
     NUM_OF_SRC_POLYLINES: 768
-    CENTER_OFFSET_OF_MAP: &center_offset [30.0, 0]
+    CENTER_OFFSET_OF_MAP: &center_offset [0.0, 0]
 
 
 MODEL:
@@ -55,18 +55,18 @@ MODEL:
         USE_LOCAL_ATTN: True
 
     MOTION_DECODER:
-        NAME: SimpleBCDecoder
+        NAME: BCDecoder
 
         OBJECT_TYPE: *object_type 
         CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_FUTURE_FRAMES: 80
-        NUM_MOTION_MODES: 16
+        NUM_MOTION_MODES: 6
 
         INTENTION_POINTS_FILE: data/waymo/cluster_64_center_dict.pkl
 
         D_MODEL: 256
-        NUM_DECODER_LAYERS: 4 
+        NUM_DECODER_LAYERS: 2
         NUM_ATTN_HEAD: 8
         MAP_D_MODEL: 256
         DROPOUT_OF_ATTN: 0.1 
