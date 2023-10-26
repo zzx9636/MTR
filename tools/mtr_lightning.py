@@ -122,14 +122,14 @@ class MTR_Lightning(pl.LightningModule):
     def forward(self, batch, get_loss: bool = False):
         return self.model(batch, get_loss)
     
-    def sample(self, batch):
+    def sample(self, batch, layer = -1):
         self.eval()
         with torch.no_grad():
             batch_dict = self.model(batch, get_loss=False)
             # pred_scores = batch_dict['pred_scores']
             # pred_ctrls = batch_dict['pred_ctrls']
             # print(len(batch_dict['pred_list']))
-            pred_ctrls, pred_scores = batch_dict['pred_list'][-1]
+            pred_ctrls, pred_scores = batch_dict['pred_list'][layer]
             mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
             sample = gmm.sample()#.cpu().numpy()
