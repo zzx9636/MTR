@@ -1,10 +1,10 @@
 # Motion Transformer (MTR): https://arxiv.org/abs/2209.13508
 # Published at NeurIPS 2022
-# Written by Shaoshuai Shi 
+# Written by Shaoshuai Shi
 # All Rights Reserved
 
 
-import torch 
+import torch
 
 
 def batch_nms(pred_trajs, pred_scores, dist_thresh, num_ret_modes=6):
@@ -99,7 +99,7 @@ def get_ade_of_each_category(pred_trajs, gt_trajs, gt_trajs_mask, object_types, 
         
     """
     ret_dict = {}
-    
+
     for cur_type in valid_type_list:
         type_mask = (object_types == cur_type)
         ret_dict[f'{pre_tag}ade_{cur_type}{post_tag}'] = -0.0
@@ -113,3 +113,40 @@ def get_ade_of_each_category(pred_trajs, gt_trajs, gt_trajs_mask, object_types, 
         )
         ret_dict[f'{pre_tag}ade_{cur_type}{post_tag}'] = ade
     return ret_dict
+
+
+def bic_deriv(state: torch.Tensor, ctrl: torch.Tensor, car_length: torch.Tensor) -> torch.Tensor:
+    """
+    Args:
+        state (torch.Tensor): (n_agent, 4, n_ctrl), x, y, v, heading
+        ctrl (torch.Tensor): (n_agent, 2, n_ctrl), accel, steering
+        car_length (torch.Tensor): (n_agent,)
+
+    Returns:
+        torch.Tensor: derivative of (n_agent, 4, N)
+    """
+    deriv = torch.zeros_like(state)
+    wheelbase = car_length[:, None] * 0.6  # ! 0.6 is an approximate value as we do not the wheelbase of the vehicle.
+
+    deriv[:, 0] = state[:, 2] * torch.cos(state[:, 3])
+    deriv[:, 1] = state[:, 2] * torch.sin(state[:, 3])
+    deriv[:, 2] = ctrl[:, 0]
+    deriv[:, 3] = state[:, 2] * torch.tan(ctrl[:, 1]) / wheelbase
+    return deriv
+
+
+def bicycle_RK4(state: torch.Tensor, ctrl: torch.Tensor, dt: float):
+    """
+    Args:
+        state (torch.Tensor): (n_agent, 4, n_ctrl), x, y, v, heading
+        ctrl (torch.Tensor): (n_agent, 2, n_ctrl), accel, steering
+
+    Returns:
+        torch.Tensor: new state (n_agent, 4, N)
+    """
+    assert state.device == ctrl.device
+    k1 = bic_deriv(state, ctrl)
+    k2 = bic_deriv(state + k1*dt/2, ctrl)
+    k3 = bic_deriv(state + k2*dt/2, ctrl)
+    k4 = bic_deriv(state + k3*dt, ctrl)
+    return state + (k1 + 2*k2 + 2*k3 + k4) * dt / 6

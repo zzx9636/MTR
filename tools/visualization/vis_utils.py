@@ -26,8 +26,8 @@ def setup_canvas():
         ax.yaxis.set_tick_params(labelleft=False)
 
         # Hide X and Y axes tick marks
-        ax.set_xticks([])
-        ax.set_yticks([])
+        # ax.set_xticks([])
+        # ax.set_yticks([])
     plt.tight_layout()#pad=0)
     return fig, ax
 
@@ -354,6 +354,7 @@ def plot_traj_with_time(
     fixed_linewidth: float = None,
     fixed_linestyle: str = None,
     fixed_alpha: float = None,
+    plot_cmap: bool = True,
 ):
     '''
     This function plot trajectory with time as color gradient
@@ -382,8 +383,8 @@ def plot_traj_with_time(
         lc.set_array(valid_time)
         lc.set_linewidth(linewidth)
         line = ax.add_collection(lc)
-
-    fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
+    if plot_cmap:
+        fig.colorbar(line, ax=ax, label='TImeStamp (s)', location='right', shrink=0.3, pad=0.02)
 
 
 def plot_obj_pose(

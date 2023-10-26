@@ -371,7 +371,7 @@ class WaymoDataset(DatasetTemplate):
             center_heading=center_objects[:, 6],
             heading_index=6, rot_vel_index=[7, 8]
         )
-        ret_obj_trajs_future = obj_trajs_future[:, :, :, [0, 1, 7, 8, 6]]  # (x, y, vx, vy, heading)
+        ret_obj_trajs_future = obj_trajs_future[:, :, :, [0, 1, 7, 8]]  # (x, y, vx, vy)
         ret_obj_valid_mask_future = obj_trajs_future[:, :, :, -1]  # (num_center_obejcts, num_objects, num_timestamps_future)  # TODO: CHECK THIS, 20220322
         ret_obj_trajs_future[ret_obj_valid_mask_future == 0] = 0
 

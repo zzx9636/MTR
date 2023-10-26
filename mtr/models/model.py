@@ -1,9 +1,9 @@
 # Motion Transformer (MTR): https://arxiv.org/abs/2209.13508
 # Published at NeurIPS 2022
-# Written by Shaoshuai Shi 
+# Written by Shaoshuai Shi
 # All Rights Reserved
 
-
+from typing import Optional
 import numpy as np
 import os
 import torch
@@ -36,7 +36,8 @@ class MotionTransformer(nn.Module):
 
 
     def get_loss(self):
-        loss, tb_dict = self.motion_decoder.get_loss()
+        # Original MTR decoder returns three output variables
+        loss, tb_dict = self.motion_decoder.get_loss()[:2]
 
         return loss, tb_dict
 
@@ -66,16 +67,25 @@ class MotionTransformer(nn.Module):
 
         return it, epoch
 
-    def load_params_from_file(self, filename, logger = None, 
-                              to_cpu=False, freeze_pretrained = False, 
-                              keys_to_ignore = None):
+    def load_params_from_file(
+        self, filename: str, logger=None, to_cpu=False, freeze_pretrained=False, keys_to_ignore: Optional[str] = None
+    ):
+        """
+
+        Args:
+            filename (str): _description_
+            logger (_type_, optional): _description_. Defaults to None.
+            to_cpu (bool, optional): map model to cpu if True. Defaults to False.
+            freeze_pretrained (bool, optional): freeze pretrained weights if True. Defaults to False.
+            keys_to_ignore (str, optional): ignore key contains @keys_to_ignore. Defaults to None.
+        """
         if not os.path.isfile(filename):
             raise FileNotFoundError
         if logger is not None:
             logger.info('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
         else:
             print('==> Loading parameters from checkpoint %s to %s' % (filename, 'CPU' if to_cpu else 'GPU'))
-            
+
         loc_type = torch.device('cpu') if to_cpu else None
         checkpoint = torch.load(filename, map_location=loc_type)
         model_state_disk = checkpoint['model_state']
@@ -89,10 +99,10 @@ class MotionTransformer(nn.Module):
             logger.info(f'The number of disk ckpt keys: {len(model_state_disk)}')
         else:
             print(f'The number of disk ckpt keys: {len(model_state_disk)}')
-        
+
         model_state = self.state_dict()
         model_state_disk_filter = {}
-        
+
         for key, val in model_state_disk.items():
             if keys_to_ignore is not None and keys_to_ignore in key:
                 continue
@@ -107,12 +117,12 @@ class MotionTransformer(nn.Module):
         model_state_disk = model_state_disk_filter
 
         missing_keys, unexpected_keys = self.load_state_dict(model_state_disk, strict=False)
-        
+
         if freeze_pretrained:
             for name, param in self.named_parameters():
                 if name not in missing_keys:
                     param.requires_grad = False
-                    
+
         if logger is not None:
             logger.info(f'Missing keys: {missing_keys}')
             logger.info(f'The number of missing keys: {len(missing_keys)}')
@@ -128,5 +138,3 @@ class MotionTransformer(nn.Module):
         it = checkpoint.get('it', 0.0)
 
         return it, epoch
-
-
