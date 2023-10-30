@@ -15,7 +15,7 @@ from mtr.models.utils.transformer import transformer_decoder_layer, multi_head_a
 from mtr.models.utils.transformer import position_encoding_utils
 from mtr.models.utils import common_layers
 from mtr.utils import common_utils, loss_utils, motion_utils
-from mtr.config import cfg
+# from mtr.config import cfg
 from torch.distributions import MultivariateNormal, MixtureSameFamily, Categorical
 
 

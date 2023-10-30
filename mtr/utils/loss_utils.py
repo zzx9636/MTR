@@ -3,12 +3,14 @@
 # Written by Shaoshuai Shi
 # All Rights Reserved
 
-from typing import Tuple
+from typing import Tuple, Optional
 import torch
 
 
-def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_nearest_mode_idxs=None,
-                        timestamp_loss_weight=None, use_square_gmm=False, log_std_range=(-1.609, 5.0), rho_limit=0.5):
+def nll_loss_gmm_direct(
+    pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_nearest_mode_idxs=None, timestamp_loss_weight=None,
+    use_square_gmm=False, log_std_range=(-1.609, 5.0), rho_limit=0.5
+):
     """
     GMM Loss for Motion Transformer (MTR): https://arxiv.org/abs/2209.13508
     Written by Shaoshuai Shi
@@ -43,7 +45,7 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
 
     if use_square_gmm:
         log_std1 = log_std2 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
-        std1 = std2 = torch.exp(log_std1)   # (0.2m to 150m)
+        std1 = std2 = torch.exp(log_std1)  # (0.2m to 150m)
         rho = torch.zeros_like(log_std1)
     else:
         log_std1 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
@@ -58,9 +60,10 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
 
     # -log(a^-1 * e^b) = log(a) - b
     reg_gmm_log_coefficient = log_std1 + log_std2 + 0.5 * torch.log(1 - rho**2)  # (batch_size, num_timestamps)
-    reg_gmm_exp = (0.5 * 1 / (1 - rho**2)) * ((dx**2) / (std1**2) + (dy**2) / (std2**2) - 2 * rho * dx * dy / (std1 * std2))  # (batch_size, num_timestamps)
+    reg_gmm_exp = (0.5 * 1 / (1 - rho**2)) * ((dx**2) / (std1**2) + (dy**2) / (std2**2) - 2 * rho * dx * dy /
+                                              (std1*std2))  # (batch_size, num_timestamps)
 
-    reg_loss = ((reg_gmm_log_coefficient + reg_gmm_exp) * gt_valid_mask).sum(dim=-1)
+    reg_loss = ((reg_gmm_log_coefficient+reg_gmm_exp) * gt_valid_mask).sum(dim=-1)
 
     return reg_loss, nearest_mode_idxs
 
@@ -79,11 +82,11 @@ def ctrl_loss_gmm_direct(pred_scores, pred_ctrl, gt_ctrl, gt_valid_mask, log_std
     """
     independent = pred_ctrl.shape[-1] == 6
 
-    gt_ctrl = gt_ctrl.unsqueeze(-2) # (batch_size, 1, 3)
-    gt_valid_mask = gt_valid_mask.unsqueeze(-1) # (batch_size, 1)
+    gt_ctrl = gt_ctrl.unsqueeze(-2)  # (batch_size, 1, 3)
+    gt_valid_mask = gt_valid_mask.unsqueeze(-1)  # (batch_size, 1)
 
     res_trajs = gt_ctrl - pred_ctrl[..., :3]  # (batch_size, num_modes, 3)
-    res_trajs = res_trajs.unsqueeze(-1) # (batch_size, num_modes, 3, 1)
+    res_trajs = res_trajs.unsqueeze(-1)  # (batch_size, num_modes, 3, 1)
 
     # assert torch.isfinite(res_trajs).all(), "Nan in res_trajs"
 
@@ -97,13 +100,13 @@ def ctrl_loss_gmm_direct(pred_scores, pred_ctrl, gt_ctrl, gt_valid_mask, log_std
     if independent:
         rho1 = rho2 = rho3 = torch.zeros_like(log_std1)
     else:
-        rho1 = torch.clip(pred_ctrl[..., 6], min=-rho_limit, max=rho_limit) # 1&2
-        rho2 = torch.clip(pred_ctrl[..., 7], min=-rho_limit, max=rho_limit) # 1&3
-        rho3 = torch.clip(pred_ctrl[..., 8], min=-rho_limit, max=rho_limit) # 2&3
+        rho1 = torch.clip(pred_ctrl[..., 6], min=-rho_limit, max=rho_limit)  # 1&2
+        rho2 = torch.clip(pred_ctrl[..., 7], min=-rho_limit, max=rho_limit)  # 1&3
+        rho3 = torch.clip(pred_ctrl[..., 8], min=-rho_limit, max=rho_limit)  # 2&3
 
     gt_valid_mask = gt_valid_mask.type_as(pred_scores)
 
-    R_det = 1 - rho1**2 - rho2**2 - rho3**2 + 2*rho1*rho2*rho3 # (batch_size, num_modes)
+    R_det = 1 - rho1**2 - rho2**2 - rho3**2 + 2*rho1*rho2*rho3  # (batch_size, num_modes)
     # print('rdet', R_det.min(), R_det.max())
     # assert torch.isfinite(R_det).all(), "Nan in R_det"
 
@@ -115,31 +118,29 @@ def ctrl_loss_gmm_direct(pred_scores, pred_ctrl, gt_ctrl, gt_valid_mask, log_std
     # Express the inverse of the covariance matrix in terms of the correlation coefficients
     cov_inv = torch.zeros((res_trajs.shape[0], res_trajs.shape[1], 3, 3)).type_as(res_trajs)
 
-    cov_inv[..., 0, 0] = (1-rho3**2)/(std1**2)
-    cov_inv[..., 0, 1] = (rho2*rho3-rho1)/(std1*std2)
-    cov_inv[..., 0, 2] = (rho1*rho3-rho2)/(std1*std3)
+    cov_inv[..., 0, 0] = (1 - rho3**2) / (std1**2)
+    cov_inv[..., 0, 1] = (rho2*rho3 - rho1) / (std1*std2)
+    cov_inv[..., 0, 2] = (rho1*rho3 - rho2) / (std1*std3)
 
-    cov_inv[..., 1, 0] = (rho2*rho3-rho1)/(std1*std2)
-    cov_inv[..., 1, 1] = (1-rho3**2)/(std2**2)
-    cov_inv[..., 1, 2] = (rho1*rho2-rho3)/(std2*std3)
+    cov_inv[..., 1, 0] = (rho2*rho3 - rho1) / (std1*std2)
+    cov_inv[..., 1, 1] = (1 - rho3**2) / (std2**2)
+    cov_inv[..., 1, 2] = (rho1*rho2 - rho3) / (std2*std3)
 
-    cov_inv[..., 2, 0] = (rho1*rho3-rho2)/(std1*std3)
-    cov_inv[..., 2, 1] = (rho1*rho2-rho3)/(std2*std3)
-    cov_inv[..., 2, 2] = (1-rho2**2)/(std3**2)
+    cov_inv[..., 2, 0] = (rho1*rho3 - rho2) / (std1*std3)
+    cov_inv[..., 2, 1] = (rho1*rho2 - rho3) / (std2*std3)
+    cov_inv[..., 2, 2] = (1 - rho2**2) / (std3**2)
 
-    cov_inv = cov_inv/(R_det.unsqueeze(-1).unsqueeze(-1))
+    cov_inv = cov_inv / (R_det.unsqueeze(-1).unsqueeze(-1))
     # assert torch.isfinite(cov_inv).all(), "Nan in cov_inv"
     # print('cov_inv', cov_inv.min(), cov_inv.max())
     reg_gmm_exp = 0.5 * torch.einsum(
-            'bmij, bmjk->bmik',
-            torch.einsum('bmij, bmik->bmjk', res_trajs, cov_inv),
-            res_trajs
-        ).squeeze(-1).squeeze(-1) # (batch_size, num_modes)
+        'bmij, bmjk->bmik', torch.einsum('bmij, bmik->bmjk', res_trajs, cov_inv), res_trajs
+    ).squeeze(-1).squeeze(-1)  # (batch_size, num_modes)
 
     # print('reg_gmm_exp', reg_gmm_exp.min(), reg_gmm_exp.max())
     # assert torch.isfinite(reg_gmm_exp).all(), "Nan in reg_gmm_exp"
 
-    reg_loss = (reg_gmm_log_coefficient + reg_gmm_exp) * gt_valid_mask
+    reg_loss = (reg_gmm_log_coefficient+reg_gmm_exp) * gt_valid_mask
 
     # Choose the smallest NLL loss
     reg_loss, best_idx = torch.min(reg_loss, dim=-1)
@@ -174,13 +175,15 @@ def gen_smooth_heatmap_target(
 
 
 def pixelwise_focal_loss(
-    prob: torch.Tensor, indices_gt: torch.Tensor, alpha: float = 2.0, beta: float = 4.0, gaussian_std: float = 4.0
+    prob: torch.Tensor, indices_gt: torch.Tensor, alpha: float = 2.0, beta: float = 4.0, gaussian_std: float = 4.0,
+    target: Optional[torch.Tensor] = None
 ) -> Tuple[float, torch.Tensor]:
     assert prob.shape[0] == indices_gt.shape[0], "The number of heatmaps should be the same as the number of indices."
     n_p, width, height = prob.shape
     indices_p = torch.arange(n_p)
 
-    target = gen_smooth_heatmap_target(width, height, indices_gt, gaussian_std=gaussian_std)
+    if target is None:
+        target = gen_smooth_heatmap_target(width, height, indices_gt, gaussian_std=gaussian_std)
     target = target.to(prob)
     prob_gt = prob[indices_p, indices_gt[:, 0], indices_gt[:, 1]]
 
@@ -191,13 +194,16 @@ def pixelwise_focal_loss(
     return loss, loss_all
 
 
-def pixelwise_home_loss(prob: torch.Tensor, indices_gt: torch.Tensor, beta: float = 4.0,
-                        gaussian_std: float = 4.0) -> Tuple[float, torch.Tensor]:
+def pixelwise_home_loss(
+    prob: torch.Tensor, indices_gt: torch.Tensor, beta: float = 4.0, gaussian_std: float = 4.0,
+    target: Optional[torch.Tensor] = None
+) -> Tuple[float, torch.Tensor]:
     assert prob.shape[0] == indices_gt.shape[0], "The number of heatmaps should be the same as the number of indices."
     n_p, width, height = prob.shape
     indices_p = torch.arange(n_p)
 
-    target = gen_smooth_heatmap_target(width, height, indices_gt, gaussian_std=gaussian_std)
+    if target is None:
+        target = gen_smooth_heatmap_target(width, height, indices_gt, gaussian_std=gaussian_std)
     target = target.to(prob)
     prob_gt = prob[indices_p, indices_gt[:, 0], indices_gt[:, 1]]
     target_gt = target[indices_p, indices_gt[:, 0], indices_gt[:, 1]]
@@ -205,5 +211,21 @@ def pixelwise_home_loss(prob: torch.Tensor, indices_gt: torch.Tensor, beta: floa
     loss_all = -(1 - target)**beta * (prob - target)**2 * torch.log(1 - prob + 1e-6)
     # Updates the loss of the ground-truth pixels.
     loss_all[indices_p, indices_gt[:, 0], indices_gt[:, 1]] = -(prob_gt - target_gt)**2 * torch.log(prob_gt + 1e-6)
+    loss = torch.mean(loss_all)
+    return loss, loss_all
+
+
+def pixelwise_target_entropy_loss(
+    prob: torch.Tensor, indices_gt: torch.Tensor, target: Optional[torch.Tensor] = None
+) -> Tuple[float, torch.Tensor]:
+    assert prob.shape[0] == indices_gt.shape[0], "The number of heatmaps should be the same as the number of indices."
+    n_p, width, height = prob.shape
+    indices_p = torch.arange(n_p)
+
+    target = target.to(prob)
+    prob_gt = prob[indices_p, indices_gt[:, 0], indices_gt[:, 1]]
+
+    loss_all = torch.zeros_like(prob)
+    loss_all[indices_p, indices_gt[:, 0], indices_gt[:, 1]] = -torch.log(prob_gt + 1e-6)
     loss = torch.mean(loss_all)
     return loss, loss_all

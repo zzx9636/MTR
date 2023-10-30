@@ -41,7 +41,7 @@ def batch_nms(pred_trajs, pred_scores, dist_thresh, num_ret_modes=6):
     bs_idxs = torch.arange(batch_size).type_as(ret_idxs)
 
     for k in range(num_ret_modes):
-        cur_idx = point_val.argmax(dim=-1) # (batch_size)
+        cur_idx = point_val.argmax(dim=-1)  # (batch_size)
         ret_idxs[:, k] = cur_idx
 
         new_cover_mask = point_cover_mask[bs_idxs, cur_idx]  # (batch_size, N)
@@ -90,13 +90,13 @@ def get_ade_of_waymo(pred_trajs, gt_trajs, gt_valid_mask, calculate_steps=(5, 9,
 def get_ade_of_each_category(pred_trajs, gt_trajs, gt_trajs_mask, object_types, valid_type_list, post_tag='', pre_tag=''):
     """
     Args:
-        pred_trajs (num_center_objects, num_modes, num_timestamps, 2): 
-        gt_trajs (num_center_objects, num_timestamps, 2): 
-        gt_trajs_mask (num_center_objects, num_timestamps): 
-        object_types (num_center_objects): 
+        pred_trajs (num_center_objects, num_modes, num_timestamps, 2):
+        gt_trajs (num_center_objects, num_timestamps, 2):
+        gt_trajs_mask (num_center_objects, num_timestamps):
+        object_types (num_center_objects):
 
     Returns:
-        
+
     """
     ret_dict = {}
 
@@ -118,35 +118,35 @@ def get_ade_of_each_category(pred_trajs, gt_trajs, gt_trajs_mask, object_types, 
 def bic_deriv(state: torch.Tensor, ctrl: torch.Tensor, car_length: torch.Tensor) -> torch.Tensor:
     """
     Args:
-        state (torch.Tensor): (n_agent, 4, n_ctrl), x, y, v, heading
-        ctrl (torch.Tensor): (n_agent, 2, n_ctrl), accel, steering
-        car_length (torch.Tensor): (n_agent,)
+        state (torch.Tensor): (n_agents, n_samples, 4), x, y, v, heading. n_samples can be 1 and will be broadcasted.
+        ctrl (torch.Tensor): (n_agents, n_samples, 2), accel, steering. n_agents can be 1 and will be broadcasted.
+        car_length (torch.Tensor): (n_agents,)
 
     Returns:
-        torch.Tensor: derivative of (n_agent, 4, N)
+        torch.Tensor: derivative of (n_agents, n_samples, 4)
     """
-    deriv = torch.zeros_like(state)
-    wheelbase = car_length[:, None] * 0.6  # ! 0.6 is an approximate value as we do not the wheelbase of the vehicle.
+    deriv = torch.zeros((state.shape[0], ctrl.shape[1], 4)).to(state)
+    wheelbase = car_length[:, None] * 0.6  # ! 0.6: approximate value as we do not know the wheelbase of the vehicle.
 
-    deriv[:, 0] = state[:, 2] * torch.cos(state[:, 3])
-    deriv[:, 1] = state[:, 2] * torch.sin(state[:, 3])
-    deriv[:, 2] = ctrl[:, 0]
-    deriv[:, 3] = state[:, 2] * torch.tan(ctrl[:, 1]) / wheelbase
+    deriv[..., 0] = state[..., 2] * torch.cos(state[..., 3])
+    deriv[..., 1] = state[..., 2] * torch.sin(state[..., 3])
+    deriv[..., 2] = ctrl[..., 0]
+    deriv[..., 3] = state[..., 2] * torch.tan(ctrl[..., 1]) / wheelbase
     return deriv
 
 
-def bicycle_RK4(state: torch.Tensor, ctrl: torch.Tensor, dt: float):
+def bicycle_RK4(state: torch.Tensor, ctrl: torch.Tensor, dt: float, car_length: torch.Tensor):
     """
     Args:
-        state (torch.Tensor): (n_agent, 4, n_ctrl), x, y, v, heading
-        ctrl (torch.Tensor): (n_agent, 2, n_ctrl), accel, steering
+        state (torch.Tensor): (n_agents, n_samples, 4), x, y, v, heading. n_samples can be 1 and will be broadcasted.
+        ctrl (torch.Tensor): (n_agents, n_samples, 2), accel, steering. n_agents can be 1 and will be broadcasted.
 
     Returns:
-        torch.Tensor: new state (n_agent, 4, N)
+        torch.Tensor: new state (n_agents, n_samples, 4)
     """
     assert state.device == ctrl.device
-    k1 = bic_deriv(state, ctrl)
-    k2 = bic_deriv(state + k1*dt/2, ctrl)
-    k3 = bic_deriv(state + k2*dt/2, ctrl)
-    k4 = bic_deriv(state + k3*dt, ctrl)
+    k1 = bic_deriv(state, ctrl, car_length)
+    k2 = bic_deriv(state + k1*dt/2, ctrl, car_length)
+    k3 = bic_deriv(state + k2*dt/2, ctrl, car_length)
+    k4 = bic_deriv(state + k3*dt, ctrl, car_length)
     return state + (k1 + 2*k2 + 2*k3 + k4) * dt / 6
