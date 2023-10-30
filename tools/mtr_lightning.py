@@ -139,7 +139,7 @@ class MTR_Lightning(pl.LightningModule):
         
         
 # main function
-def train(cfg_file, pretrained_model, freeze_pretrained):
+def train(cfg_file, pretrained_encoder, freeze_pretrained, weight = None):
     logger = PrintLogger()
     # Load the config
     cfg_from_yaml_file(cfg_file, cfg)
@@ -174,7 +174,13 @@ def train(cfg_file, pretrained_model, freeze_pretrained):
         drop_last=False
     )
     
-    model = MTR_Lightning(cfg, logger, pretrained_model, freeze_pretrained)
+    model = MTR_Lightning(cfg, logger, pretrained_encoder, freeze_pretrained)
+    if weight is not None:
+        print("Loading weight from: ", weight)
+        model = MTR_Lightning.load_from_checkpoint(weight)
+        # Make all the parameters trainable
+        for param in model.parameters():
+            param.requires_grad = True
     
     logger = WandbLogger(project='MTR_BC_ATTEN', entity='zzx9636', log_model = True)
     logger.watch(model, log_freq=100)
@@ -208,7 +214,8 @@ if __name__ == '__main__':
     train(
         'tools/cfgs/waymo/bc+10_percent_data_atten.yaml',
         'model/checkpoint_epoch_30.pth',
-        True
+        False,
+        'output/bc_atten_0_freeze/epoch=31-step=97664.ckpt'
     )
 
          
