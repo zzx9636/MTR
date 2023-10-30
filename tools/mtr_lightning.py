@@ -125,16 +125,19 @@ class MTR_Lightning(pl.LightningModule):
     def sample(self, batch, layer = -1):
         self.eval()
         with torch.no_grad():
-            batch_dict = self.model(batch, get_loss=False)
-            # pred_scores = batch_dict['pred_scores']
-            # pred_ctrls = batch_dict['pred_ctrls']
-            # print(len(batch_dict['pred_list']))
-            pred_ctrls, pred_scores = batch_dict['pred_list'][layer]
-            mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
-            # batch_size = pred_scores.shape[0]
-            sample = gmm.sample()#.cpu().numpy()
-            sample = (sample * self.model.motion_decoder.output_std + self.model.motion_decoder.output_mean).cpu().numpy()
-        return mode, mix, gmm, sample
+            data_batch = self.model.context_encoder(batch)
+            sample = self.model.motion_decoder.sample(data_batch)
+            return None, sample
+        #     batch_dict = self.model(batch, get_loss=False)
+        #     # pred_scores = batch_dict['pred_scores']
+        #     # pred_ctrls = batch_dict['pred_ctrls']
+        #     # print(len(batch_dict['pred_list']))
+        #     pred_ctrls, pred_scores = batch_dict['pred_list'][layer]
+        #     mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
+        #     # batch_size = pred_scores.shape[0]
+        #     sample = gmm.sample()#.cpu().numpy()
+        #     sample = (sample * self.model.motion_decoder.output_std + self.model.motion_decoder.output_mean).cpu().numpy()
+        # return mode, mix, gmm, sample
         
         
         
