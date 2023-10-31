@@ -58,6 +58,8 @@ class WaymoDatasetBC(DatasetTemplate):
         infos = src_infos[::self.dataset_cfg.SAMPLE_INTERVAL[self.mode]]
         if self.logger is not None:
             self.logger.info(f'Total scenes before filters: {len(infos)}')
+        else:
+            print(f'Total scenes before filters: {len(infos)}') 
 
         for func_name, val in self.dataset_cfg.INFO_FILTER_DICT.items():
             infos = getattr(self, func_name)(infos, val)

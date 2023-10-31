@@ -9,7 +9,7 @@ import numpy as np
 from typing import Dict, List, Tuple
 from .vis_config_bright import canvas_config, road_line_config, road_edge_config, speed_bump_config, \
     crosswalk_config, lane_config, stop_sign_config, object_config, signal_config, driveway_config
-from core.utils import PyLaneletMap
+# from core.utils import PyLaneletMap
 
 v_max = 10
 v_min = 0
@@ -499,51 +499,51 @@ def plot_signal(
                 continue
             ax.add_patch(p)
 
-def plot_map_from_graph(map_graph: PyLaneletMap, map_infos: Dict, if_plot_lane=False, fig=None, ax=None):
-    plot_id = []
-    if fig is None or ax is None:
-        fig, ax = setup_canvas()
+# def plot_map_from_graph(map_graph: PyLaneletMap, map_infos: Dict, if_plot_lane=False, fig=None, ax=None):
+#     plot_id = []
+#     if fig is None or ax is None:
+#         fig, ax = setup_canvas()
     
-    polylines = map_infos['all_polylines']
+#     polylines = map_infos['all_polylines']
         
-    for id, lanelet in map_graph.lanelets.items():
-        if map_infos['id_to_type'][id] == 'lane':
+#     for id, lanelet in map_graph.lanelets.items():
+#         if map_infos['id_to_type'][id] == 'lane':
 
-            lane = map_infos['lane'][id]
-            if if_plot_lane:
-                config = lane_config[lane['type']]
-                vertex = lanelet.get_bbox_vertices()
-                p = Polygon(
-                    vertex, facecolor=config['color'], edgecolor=config['color'], linewidth=config['linewidth'],
-                    alpha=0.5, zorder=1
-                )
-                ax.add_patch(p)
-                plot_lane(lane, map_infos['all_polylines'], ax, color='xkcd:crimson', linewidth=0.5, linestyle='-')
+#             lane = map_infos['lane'][id]
+#             if if_plot_lane:
+#                 config = lane_config[lane['type']]
+#                 vertex = lanelet.get_bbox_vertices()
+#                 p = Polygon(
+#                     vertex, facecolor=config['color'], edgecolor=config['color'], linewidth=config['linewidth'],
+#                     alpha=0.5, zorder=1
+#                 )
+#                 ax.add_patch(p)
+#                 plot_lane(lane, map_infos['all_polylines'], ax, color='xkcd:crimson', linewidth=0.5, linestyle='-')
 
-            # plot left boundary
-            for boundary in lane['left_boundaries'] + lane['right_boundaries']:
-                feature_id = boundary['feature_id']
-                if feature_id in plot_id:
-                    continue
-                else:
-                    plot_id.append(feature_id)
+#             # plot left boundary
+#             for boundary in lane['left_boundaries'] + lane['right_boundaries']:
+#                 feature_id = boundary['feature_id']
+#                 if feature_id in plot_id:
+#                     continue
+#                 else:
+#                     plot_id.append(feature_id)
                 
-                feature_type = map_infos['id_to_type'][feature_id]
-                if feature_type == 'road_edge':
-                    plot_road_edge(
-                        map_infos['road_edge'][feature_id], polylines, ax
-                    )  #, range=(boundary['start_index'], boundary['end_index']))
-                elif feature_type == 'road_line':
-                    plot_road_line(
-                        map_infos['road_line'][feature_id], polylines, ax
-                    )  #, range=(boundary['start_index'], boundary['end_index']))
-                else:
-                    print(f'feature type {feature_type} not supported')
-        elif map_infos['id_to_type'][id] == 'crosswalk':
-            cross_walk = map_infos['crosswalk'][id]
-            plot_crosswalk(cross_walk, ax)
+#                 feature_type = map_infos['id_to_type'][feature_id]
+#                 if feature_type == 'road_edge':
+#                     plot_road_edge(
+#                         map_infos['road_edge'][feature_id], polylines, ax
+#                     )  #, range=(boundary['start_index'], boundary['end_index']))
+#                 elif feature_type == 'road_line':
+#                     plot_road_line(
+#                         map_infos['road_line'][feature_id], polylines, ax
+#                     )  #, range=(boundary['start_index'], boundary['end_index']))
+#                 else:
+#                     print(f'feature type {feature_type} not supported')
+#         elif map_infos['id_to_type'][id] == 'crosswalk':
+#             cross_walk = map_infos['crosswalk'][id]
+#             plot_crosswalk(cross_walk, ax)
 
-    return fig, ax
+#     return fig, ax
 
 def plot_map(map_infos: Dict, if_plot_lane=False, map_graph = None, fig = None, ax = None):
     polylines = map_infos['all_polylines']

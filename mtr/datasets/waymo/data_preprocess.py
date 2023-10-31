@@ -285,11 +285,11 @@ def get_infos_from_protos(data_path, output_path=None, num_workers=8):
 
 def create_infos_from_protos(raw_data_path, output_path, num_workers=16):
     train_infos = get_infos_from_protos(
-        data_path=os.path.join(raw_data_path, 'training_10p'),
-        output_path=os.path.join(output_path, 'processed_scenarios_training'),
+        data_path=os.path.join(raw_data_path, 'training_20s_test'),
+        output_path=os.path.join(output_path, 'processed_scenarios_training_20s'),
         num_workers=num_workers
     )
-    train_filename = os.path.join(output_path, 'processed_scenarios_training_infos.pkl')
+    train_filename = os.path.join(output_path, 'processed_scenarios_training_20s_infos.pkl')
     with open(train_filename, 'wb') as f:
         pickle.dump(train_infos, f)
     print('----------------Waymo info train file is saved to %s----------------' % train_filename)
