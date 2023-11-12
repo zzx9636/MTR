@@ -4,12 +4,12 @@
 # All Rights Reserved
 
 
-from .mtr_decoder import MTRDecoder
+# from .mtr_decoder import MTRDecoder
 from .bc_decoder import BCDecoder
 from .simple_bc_decoder import SimpleBCDecoder
 
 __all__ = {
-    'MTRDecoder': MTRDecoder,
+    # 'MTRDecoder': MTRDecoder,
     'BCDecoder': BCDecoder,
     'SimpleBCDecoder': SimpleBCDecoder,
 }

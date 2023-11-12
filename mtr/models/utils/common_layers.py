@@ -33,3 +33,34 @@ def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False
 
     return nn.Sequential(*layers)
 
+
+
+class ResidualMLP(nn.Module):
+    def __init__(self, c_in, c_out, num_mlp=4, without_norm = True) -> None:
+        super().__init__()
+        assert num_mlp >= 1
+        
+        self.mlp_list = nn.ModuleList(
+            [
+                build_mlps(
+                    c_in=c_in,
+                    mlp_channels=[c_in, c_in],
+                    without_norm=without_norm,
+                    ret_before_act=True
+                )
+                for _ in range(num_mlp)
+            ]
+        )
+        self.out_mlp = build_mlps(
+            c_in=c_in,
+            mlp_channels=[c_in, c_out],
+            without_norm=without_norm,
+            ret_before_act=True
+        )
+        
+    def forward(self, x):
+        original_shape = x.shape
+        x = x.view(-1, original_shape[-1])
+        for mlp in self.mlp_list:
+            x = x + mlp(x)
+        return self.out_mlp(x).view(*original_shape[:-1], -1)

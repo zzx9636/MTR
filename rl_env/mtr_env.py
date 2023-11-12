@@ -1,9 +1,10 @@
 from typing import Any, Union, Dict, List, Optional
 import numpy as np
 from mtr.datasets.waymo.waymo_dataset_bc import WaymoDatasetBC as WaymoDataset
-from .visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose
+from tools.visualization.vis_utils import plot_map, plot_signal, plot_traj_with_time, plot_obj_pose
 from mtr.utils import common_utils
 import torch
+from rl_env.env_utils import *
 
 class BatchMTREnv:
     def __init__(self,
@@ -23,7 +24,7 @@ class BatchMTREnv:
                 
     def reset(self, reset_bool: np.ndarray = None, no_sdc: bool = False):
         if reset_bool is None: # Reset all the environments
-            reset_bool = np.ones(self.num_envs, dtype = np.bool)
+            reset_bool = np.ones(self.num_envs, dtype = bool)
         else:
             assert reset_bool.shape == (self.num_envs,)
         
@@ -123,7 +124,7 @@ class BatchMTREnv:
         Input:
             rel_se2: (num_envs, 3)
         '''
-        reset_bool = np.zeros(self.num_envs, dtype = np.bool)
+        reset_bool = np.zeros(self.num_envs, dtype = bool)
         for i, env in enumerate(self.envs_list):
             env_mask = data['batch_env_idx'] == i
             rel_se2_i = rel_se2[env_mask]
@@ -360,7 +361,7 @@ class MTREnv:
         
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
             track_index_to_predict_new, obj_types, obj_ids) \
-        = self.create_agent_data_for_center_objects(
+        = create_agent_data_for_center_objects(
             center_objects=center_objects,
             obj_trajs_past=obj_trajs_past, 
             track_index_to_predict=self.track_index_to_predict,
@@ -373,8 +374,9 @@ class MTREnv:
         # Extract the map information
         # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
         # (num_center_objects, num_topk_polylines, num_points_each_polyline)
-        map_polylines_data, map_polylines_mask, map_polylines_center = self.dataset.create_map_data_for_center_objects(
-                center_objects=center_objects, map_infos=self.map_infos,
+        map_polylines_data, map_polylines_mask, map_polylines_center = create_map_data_for_center_objects(
+                center_objects=center_objects, 
+                polylines=self.map_infos['all_polylines'],
                 center_offset=(0, 0), # !Hardcoded
             )   
         
