@@ -13,7 +13,8 @@ from mtr.models.utils.common_layers import ResidualMLP
 # from mtr.utils import common_utils, loss_utils, motion_utils
 from mtr.config import cfg
 from torch.distributions import MultivariateNormal, MixtureSameFamily, Categorical
-                         
+import numpy as np
+                   
 class BCDecoder(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
@@ -21,13 +22,12 @@ class BCDecoder(nn.Module):
         self.object_type = self.model_cfg.OBJECT_TYPE
         self.num_future_frames = self.model_cfg.NUM_FUTURE_FRAMES
         self.num_motion_modes = self.model_cfg.NUM_MOTION_MODES
-        self.use_place_holder = self.model_cfg.get('USE_PLACE_HOLDER', False)
         self.d_model = self.model_cfg.D_MODEL
         self.n_head = self.model_cfg.NUM_ATTN_HEAD
         self.dropout = self.model_cfg.get('DROPOUT_OF_ATTN', 0.1)
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
         self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
-        self.use_local_attn = self.model_cfg.get('USE_LOCAL_ATTN', False)
+        self.use_bicycle_model = self.model_cfg.get('USE_BICYCLE_MODEL', False)
         
         # Build the query
         self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
@@ -83,9 +83,14 @@ class BCDecoder(nn.Module):
             
         
         # Prediction Head
+        if self.use_bicycle_model:
+            output_dim = 9
+        else:
+            output_dim = 10
+            
         self.prediction_layers = nn.ModuleList([ResidualMLP(
                 c_in = self.d_model,
-                c_out = 10,
+                c_out = output_dim,
                 num_mlp = 4,
                 without_norm = True       
             ) for _ in range(self.num_decoder_layers+1)])
@@ -142,9 +147,10 @@ class BCDecoder(nn.Module):
         center_gt = (center_gt - self.output_mean) / self.output_std
         
         total_loss = 0 
-        for i, (pred_ctrls, pred_scores) in enumerate(self.forward_ret_dict['pred_list']):
+        for i, (pred_states, pred_scores) in enumerate(self.forward_ret_dict['pred_list']):               
             # Get mode for all
-            mode_all = self.build_mode_distribution(pred_ctrls) # [batch size]
+            # print(pred_states.shape)
+            mode_all = self.build_mode_distribution(pred_states) # [batch size]
             nll_loss_all = -mode_all.log_prob(center_gt)            
             nll_loss_best, best_idx = nll_loss_all.min(dim=-1)
             
@@ -163,8 +169,8 @@ class BCDecoder(nn.Module):
             tb_dict[f'{tb_pre_tag}layer{i}_loss_cls'] = cls_loss.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss'] = layer_loss.item()
             
-            tb_dict[f'{tb_pre_tag}layer{i}_pred_mean'] = pred_ctrls.mean().item()
-            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_ctrls.std(dim=1).mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_mean'] = pred_states.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_states.std(dim=1).mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_score_mean'] = pred_scores.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_score_std'] = pred_scores.std(dim=1).mean().item()
             
@@ -254,9 +260,17 @@ class BCDecoder(nn.Module):
         
         # Initialize prediction with out attention
         prediction = self.prediction_layers[0](query_embed)
-        pred_ctrls = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
         pred_scores = prediction[..., -1].permute(1, 0).contiguous()
-        pred_list = [(pred_ctrls, pred_scores)]
+        pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+        
+        if self.use_bicycle_model:
+            pred_ctrls = pred_states[..., :2] # (num_center_objects, num_motion_modes, 2)
+            pred_ctrls_sigma = pred_states[..., 2:] # (num_center_objects, num_motion_modes, 6)
+            pred_states = self.bicycle_forward(input_dict, pred_ctrls)
+            pred_states = (pred_states - self.output_mean) / self.output_std # normalize the output
+            pred_states = torch.cat([pred_states, pred_ctrls_sigma], dim=-1) # (num_center_objects, num_motion_modes, 9)
+        
+        pred_list = [(pred_states, pred_scores)]
         
         
         for i in range(self.num_decoder_layers):
@@ -297,10 +311,17 @@ class BCDecoder(nn.Module):
             
             prediction = pred_layer(query_embed)
             
-            pred_ctrls = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+            pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
             pred_scores = prediction[..., -1].permute(1, 0).contiguous()
             
-            pred_list.append((pred_ctrls, pred_scores))
+            if self.use_bicycle_model:
+                pred_ctrls = pred_states[..., :2] # (num_center_objects, num_motion_modes, 2)
+                pred_ctrls_sigma = pred_states[..., 2:] # (num_center_objects, num_motion_modes, 6)
+                pred_states = self.bicycle_forward(input_dict, pred_ctrls)
+                pred_states = (pred_states - self.output_mean) / self.output_std # normalize the output
+                pred_states = torch.cat([pred_states, pred_ctrls_sigma], dim=-1) # (num_center_objects, num_motion_modes, 9)
+            
+            pred_list.append((pred_states, pred_scores))
             
         if 'center_gt' in input_dict:
             self.forward_ret_dict['pred_list'] = pred_list
@@ -309,3 +330,35 @@ class BCDecoder(nn.Module):
             
         batch_dict['pred_list'] = pred_list
         return batch_dict
+    
+    def bicycle_forward(self, input_dict, pred_ctrls, dt = 0.1, step = 5):
+        
+        num_center, num_modes, _ = pred_ctrls.shape
+        
+        full_traj = input_dict['obj_trajs'].cuda()
+        center_idx = input_dict['track_index_to_predict']
+        center_traj = full_traj[torch.arange(num_center), center_idx, -1]
+        
+        
+        # initialize the state
+        Length = 5 #center_traj[..., 3, None]
+        v = center_traj[..., -4:-2].norm(dim=-1, keepdim=True)
+        x = torch.zeros_like(v, device=v.device)
+        y = torch.zeros_like(v, device=v.device)
+        theta = torch.zeros_like(v, device=v.device)
+        
+        a = pred_ctrls[..., 0] * 10 # max acceleration is 10 m/s^2
+        delta = pred_ctrls[..., 1] * 0.35 # max steering angle is 0.35 rad        
+        beta = torch.arctan(0.5*torch.tan(delta))        
+        ddt = dt / step
+        for _ in range(step):
+            # print(v.shape, delta.shape, Length.shape)
+            theta = theta + v * torch.sin(delta) * ddt / (Length/2)
+            x = x + v * torch.cos(theta+beta) * ddt
+            y = y + v * torch.sin(theta+beta) * ddt
+            v = v + a * ddt
+            
+        return torch.stack([x, y, theta], dim=-1)
+        
+        
+        

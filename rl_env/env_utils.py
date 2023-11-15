@@ -328,7 +328,7 @@ def create_map_data_for_center_objects(center_objects, polylines, center_offset)
     return map_polylines, map_polylines_mask, map_polylines_center
 
 
-def __collate_batch__(batch_list):
+def collate_batch(batch_list):
     """
     Args:
     batch_list:

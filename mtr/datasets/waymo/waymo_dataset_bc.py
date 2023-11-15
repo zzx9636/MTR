@@ -248,6 +248,7 @@ class WaymoDatasetBC(DatasetTemplate):
         
         traj_window = obj_trajs_raw[:, current_time_index-history_length+1:current_time_index+2, :]
         assert traj_window.shape[-2] == history_length+1
+        # for obj_idx in range(len(obj_types)):
         for obj_idx in track_index_to_predict:
             obj_type = obj_types[obj_idx]
             if obj_type != 'TYPE_VEHICLE':

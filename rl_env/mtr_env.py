@@ -274,6 +274,14 @@ class MTREnv:
         self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 8] = v_world[..., 1] # vel_y
         self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 9] = 1
         
+        # sanity check for acceleration
+        v_prev = np.linalg.norm(self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index, 7:9], axis=-1)
+        v_cur = np.linalg.norm(self.obj_trajs_sim[self.track_index_to_predict, self.current_time_index + 1, 7:9], axis=-1)
+        a = (v_cur - v_prev)/self.dt
+        print(v_body[:,0], a)
+        
+        
+        
     def step_gt(self):
         '''
         Copy the ground truth trajectory to the next time step

@@ -129,6 +129,7 @@ class MTR_Lightning(pl.LightningModule):
             # pred_scores = batch_dict['pred_scores']
             # pred_ctrls = batch_dict['pred_ctrls']
             # print(len(batch_dict['pred_list']))
+            # print(len(batch_dict['pred_list']))
             pred_ctrls, pred_scores = batch_dict['pred_list'][layer]
             mode, mix, gmm = self.model.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             # batch_size = pred_scores.shape[0]
@@ -182,11 +183,12 @@ def train(cfg_file, pretrained_encoder, freeze_pretrained, weight = None):
         for param in model.parameters():
             param.requires_grad = True
     
-    logger = WandbLogger(project='MTR_BC_ATTEN', entity='zzx9636', log_model = True)
-    logger.watch(model, log_freq=100)
+    logger = WandbLogger(project='MTR_BC_ATTEN', entity='zzx9636', log_model=True)
+    logger.watch(model, log_freq=500)
     
     # logger = None
     num_decoder = cfg.MODEL.MOTION_DECODER.NUM_DECODER_LAYERS
+    use_bicycle = 'bicycle' if cfg.MODEL.MOTION_DECODER.USE_BICYCLE_MODEL else 'state'
     freeze_str = 'freeze' if freeze_pretrained else 'unfreeze'
     
     trainer = pl.Trainer(
@@ -198,7 +200,7 @@ def train(cfg_file, pretrained_encoder, freeze_pretrained, weight = None):
         gradient_clip_val=0.5, gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
-                dirpath = f'output/bc_atten_{num_decoder}_{freeze_str}',
+                dirpath = f'output/bc_atten_{num_decoder}_{freeze_str}_{use_bicycle}',
                 save_top_k=10,
                 save_last=True,
                 monitor='val/loss_total', 
@@ -212,10 +214,10 @@ def train(cfg_file, pretrained_encoder, freeze_pretrained, weight = None):
     
 if __name__ == '__main__':
     train(
-        'tools/cfgs/waymo/bc+10_percent_data_atten.yaml',
+        'tools/cfgs/waymo/bc_atten_bicycle.yaml',
         'model/checkpoint_epoch_30.pth',
-        False,
-        'output/bc_atten_0_freeze/epoch=31-step=97664.ckpt'
+        True,
+        # 'output/bc_atten_0_freeze/epoch=31-step=97664.ckpt'
     )
 
          

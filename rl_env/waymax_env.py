@@ -13,121 +13,111 @@ from waymax import config as waymax_config
 from waymax import dataloader
 from waymax import datatypes  
 from waymax import visualization
+from waymax import dynamics
+from waymax import env as waymax_env
+from waymax import agents
 
-from typing import Dict
+from typing import Dict, Tuple
 
 from rl_env.env_utils import *
+from tools.mtr_lightning import MTR_Lightning
 
 class WaymaxEnv:
-    def __init__(self):
-        self.current_time_index = 10
-    
-    def extract_scene_data(self, scenario: datatypes.SimulatorState, history_length: int = 11)->Dict:
-        """Extracts scene data from a simulator state."""
-        # Extract Objects Meta Data
-        obj_metadata: datatypes.ObjectMetadata = scenario.object_metadata
-        obj_ids = obj_metadata.ids
-        obj_types = self._convert_obj_type(obj_metadata)
-        sdc_track_index = np.where(obj_metadata.is_sdc)[0][0] # only one sdc
-        track_index_to_predict = np.where(obj_metadata.is_modeled)[0]
-
-        # Extract Objects Trajectory
-        trajectory: datatypes.Trajectory = scenario.log_trajectory # TODO: check if this is the right trajectory
-        timestamps = trajectory.timestamp_micros[0, :history_length]/1e6
-        dt = timestamps[1] - timestamps[0]
+    def __init__(self, config):
         
-        # Extract Objects State
-        obj_trajs = self._stack_traj(trajectory)
+        # Load the config
+        self.config = config
+        self.init_steps = self.config.get('INIT_STEPS', 11)
+        self.history_length = self.config.get('HISTORY_LENGTH', 11)
+        self.max_num_objects = self.config.get('MAX_NUM_OBJECTS', 32)
+        self.dt = self.config.get('DT', 0.1)
+        self.dynamics_type = self.config.get('DYNAMICS_TYPE', 'DeltaLocal')
+        self.use_jit = self.config.get('USE_JIT', True)
+        self.timestamps = np.arange(self.history_length) * self.dt
         
-        end_index = self.current_time_index + 1
-        start_index = max(0, end_index - history_length)
-        obj_trajs_past = obj_trajs[:, start_index:end_index, :]
-        center_objects = obj_trajs_past[track_index_to_predict, -1]
-        center_objects_id = obj_ids[track_index_to_predict]
-        center_objects_type = obj_types[track_index_to_predict]
         
-        if obj_trajs_past.shape[1] < history_length:
-            # pad with zeros
-            obj_trajs_past = np.pad(obj_trajs_past, ((0, 0), (history_length - obj_trajs_past.shape[1], 0), (0, 0))) 
-
-        # create agent centric trajectory
-        (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
-            track_index_to_predict_new, obj_types, obj_ids) \
-        = create_agent_data_for_center_objects(
-            center_objects=center_objects,
-            obj_trajs_past=obj_trajs_past, 
-            track_index_to_predict=track_index_to_predict,
-            sdc_track_index=sdc_track_index,
-            timestamps=timestamps,
-            obj_types=obj_types,
-            obj_ids=obj_ids
+        if self.dynamics_type == 'DeltaLocal':
+            dynamics_model = dynamics.DeltaLocal()
+        elif self.dynamics_type == 'DeltaGlobal':
+            dynamics_model = dynamics.DeltaGlobal()
+        elif self.dynamics_type == 'Bicycle':
+            dynamics_model = dynamics.InvertibleBicycleModel()
+        elif self.dynamics_type == 'StateDynamics':
+            dynamics_model = dynamics.StateDynamics()
+        else:
+            raise ValueError(f'Unknown dynamics type: {self.dynamics_type}')
+            
+        
+        # Construct the simulator
+        # TODO: This controlled_object is related to how reward is calculated, so we need to explicitly figure it out
+        self.env = waymax_env.MultiAgentEnvironment(
+            dynamics_model=dynamics_model,
+            config=dataclasses.replace(
+                waymax_config.EnvironmentConfig(),
+                max_num_objects=self.max_num_objects,
+                init_steps = self.init_steps,
+                allow_new_objects_after_warmup=True,
+                controlled_object=waymax_config.ObjectType.VALID,
+            ),
         )
         
-        polylines = self._stack_map(scenario.roadgraph_points)
-        # Extract the map information
-        # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
-        # (num_center_objects, num_topk_polylines, num_points_each_polyline)
-        map_polylines_data, map_polylines_mask, map_polylines_center = create_map_data_for_center_objects(
-                center_objects=center_objects, 
-                polylines=polylines,
-                center_offset=(0, 0), # !Hardcoded
-            )   
-        
-        ret_dict = {
-            # 'scenario_id': np.array([self.scene_id] * len(track_index_to_predict_new)),
-            'obj_trajs': obj_trajs_data,
-            'obj_trajs_mask': obj_trajs_mask,
-            'track_index_to_predict': track_index_to_predict_new,  # used to select center-features
-            'obj_trajs_pos': obj_trajs_pos,
-            'obj_trajs_last_pos': obj_trajs_last_pos,
-            'obj_types': obj_types,
-            'obj_ids': obj_ids,
-
-            'center_objects_world': center_objects,
-            'center_objects_id': center_objects_id,
-            'center_objects_type': center_objects_type,
+        # Jit-ify the simulator
+        if self.use_jit:
+            self.env_step = jit(self.env.step)
+        else:
+            self.env_step = self.env.step
             
-            'map_polylines': map_polylines_data,
-            'map_polylines_mask': map_polylines_mask,
-            'map_polylines_center': map_polylines_center,
-        }
+        # Load Model
+        self.model = MTR_Lightning(self.config)
         
-        return ret_dict
-               
-    #################### Utils ####################
-    @staticmethod
-    def _stack_traj(traj: datatypes.Trajectory) -> np.ndarray:
-        """Stacks a trajectory into a 10D array."""
-        # [cx, cy, cz, length, width, height, heading, vel_x, vel_y, valid]
-        return np.stack([
-            traj.x,
-            traj.y,
-            traj.z,
-            traj.length,
-            traj.width,
-            traj.height,
-            traj.yaw,
-            traj.vel_x,
-            traj.vel_y,
-            traj.valid,
-        ], axis=-1) # [num_tracks, num_steps, 10]
+    def reset(self, scenario: datatypes.SimulatorState) -> Tuple[datatypes.SimulatorState, Dict]:
+        """
+        Resets the environment to the initial state and returns the initial state and input dictionary.
+
+        Args:
+            scenario (datatypes.SimulatorState): The initial state of the simulator.
+
+        Returns:
+            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the initial state of the simulator and the input
+            dictionary.
+        """
+        simulation_state: datatypes.SimulatorState = self.env.reset(scenario)
+        input_dict: dict = self.process_input(simulation_state)
         
-    @staticmethod
-    def _stack_map(map_data: datatypes.RoadgraphPoints) -> np.ndarray:
-        return np.stack([
-            map_data.x,
-            map_data.y,
-            map_data.z,
-            map_data.dir_x,
-            map_data.dir_y,
-            map_data.dir_z,
-            map_data.types,
-            # map_data.ids,
-            # map_data.valid,
-        ], axis=-1) # [num_tracks, num_steps, 9]
+        return simulation_state, input_dict
+
+    def step(self, prev_state: datatypes.SimulatorState, action: datatypes.Action) -> Tuple[datatypes.SimulatorState, Dict]:
+        """
+        Steps the environment forward using the given action and returns the next state and input dictionary.
+
+        Args:
+            prev_state (datatypes.SimulatorState): The previous state of the simulator.
+            action (np.ndarray): The action to take.
+
+        Returns:
+            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the next state of the simulator and the input
+            dictionary.
+        """
+        simulation_state: datatypes.SimulatorState = self.env.step(prev_state, action)
+        input_dict: dict = self.process_input(simulation_state)
+        
+        return simulation_state, input_dict
     
-    @staticmethod
-    def _convert_obj_type(obj_metadata: datatypes.ObjectMetadata)->np.ndarray:
+    def observe(self, scenario: datatypes.SimulatorState) -> Tuple[datatypes.SimulatorState, Dict]:
+        """
+        Observe the current state of the environment.
+
+        Args:
+            scenario (datatypes.SimulatorState): The current state of the simulator.
+
+        Returns:
+            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the current state of the simulator and a dictionary of processed inputs.
+        """
+        input_dict: dict = self.process_input(scenario)
+        
+        return scenario, input_dict
+        
+   
         """Converts object type from int to string"""
         
         str_map = ['TYPE_UNSET', 'TYPE_VEHICLE', 'TYPE_PEDESTRIAN', 'TYPE_CYCLIST', 'TYPE_OTHER']
