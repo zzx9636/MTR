@@ -214,9 +214,10 @@ def train(cfg_file, pretrained_encoder, freeze_pretrained, weight = None):
     
 if __name__ == '__main__':
     train(
-        'tools/cfgs/waymo/bc_atten_bicycle.yaml',
+        'tools/cfgs/waymo/bc_atten.yaml',
         'model/checkpoint_epoch_30.pth',
-        True,
+        False,
+        'output/bc_atten_4_freeze/epoch=9-step=302840.ckpt'
         # 'output/bc_atten_0_freeze/epoch=31-step=97664.ckpt'
     )
 

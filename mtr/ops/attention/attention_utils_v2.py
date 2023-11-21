@@ -55,7 +55,8 @@ class AttentionWeightComputation(Function):
         # Need to ensure that every tensor in query features have an output.
         assert total_query_num == query_features.shape[0]
 
-        output = torch.cuda.FloatTensor(total_query_num, local_size, nhead).zero_()
+        # output = torch.cuda.FloatTensor(total_query_num, local_size, nhead).zero_()
+        output = torch.zeros((total_query_num, local_size, nhead), dtype=torch.float32, device='cuda')
 
         attention_cuda.attention_weight_computation_wrapper_v2(
             b, total_query_num, local_size, total_key_num, nhead, hdim,
@@ -145,7 +146,8 @@ class AttentionValueComputation(Function):
         # Need to ensure that every tensor in query features have an output.
         assert total_query_num == attn_weight.shape[0]
 
-        output = torch.cuda.FloatTensor(total_query_num, nhead, hdim).zero_()
+        # output = torch.cuda.FloatTensor(total_query_num, nhead, hdim).zero_()
+        output = torch.zeros((total_query_num, nhead, hdim), dtype=torch.float32, device='cuda')
 
         attention_cuda.attention_value_computation_wrapper_v2(
             b, total_query_num, local_size, total_key_num, nhead, hdim,
