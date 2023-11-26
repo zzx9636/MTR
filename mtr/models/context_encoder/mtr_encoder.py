@@ -27,6 +27,7 @@ class MTREncoder(nn.Module):
             num_layers=self.model_cfg.NUM_LAYER_IN_MLP_AGENT,
             out_channels=self.model_cfg.D_MODEL
         )
+        
         self.map_polyline_encoder = self.build_polyline_encoder(
             in_channels=self.model_cfg.NUM_INPUT_ATTR_MAP,
             hidden_dim=self.model_cfg.NUM_CHANNEL_IN_MLP_MAP,
@@ -155,7 +156,7 @@ class MTREncoder(nn.Module):
 
         obj_trajs_last_pos = input_dict['obj_trajs_last_pos'].cuda() 
         map_polylines_center = input_dict['map_polylines_center'].cuda() 
-        track_index_to_predict = input_dict['track_index_to_predict']
+        track_index_to_predict = input_dict['track_index_to_predict'].cuda()
 
         assert obj_trajs_mask.dtype == torch.bool and map_polylines_mask.dtype == torch.bool
 
@@ -189,10 +190,10 @@ class MTREncoder(nn.Module):
         map_polylines_feature = global_token_feature[:, num_objects:]
         assert map_polylines_feature.shape[1] == num_polylines
         # organize return features
-        center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
+        # center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
         
         batch_dict['track_index_to_predict'] = track_index_to_predict
-        batch_dict['center_objects_feature'] = center_objects_feature
+        # batch_dict['center_objects_feature'] = center_objects_feature
         batch_dict['obj_feature'] = obj_polylines_feature
         batch_dict['map_feature'] = map_polylines_feature
         batch_dict['obj_mask'] = obj_valid_mask
