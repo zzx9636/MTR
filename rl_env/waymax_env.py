@@ -72,9 +72,12 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
             dynamics_model (dynamics.DynamicsModel): The dynamics model used for simulating the environment.
             config (_config.EnvironmentConfig): The configuration object for the environment.
         """
-        super().__init__(dynamics_model, config)
+        # ! Do not call super().__init__ here, it will cause error
+        # super().__init__(dynamics_model, config)
         
         # override the reward function with the dictionary reward function
         self._reward_function = DictionaryReward(config.rewards)
+        self._dynamics_model = dynamics_model
+        self.config = config
         
     

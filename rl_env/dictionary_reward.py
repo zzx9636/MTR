@@ -21,16 +21,19 @@ from waymax import datatypes
 from waymax import metrics
 from waymax.rewards import abstract_reward_function
 from typing import Dict
+from rl_env.interaction_metric import InteractionMetric
 
 class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
   """Reward function that store metrics into a dictionary."""
 
   def __init__(self, config: _config.LinearCombinationRewardConfig):
     _validate_reward_metrics(config)
-
+    
     self._config = config
     self._metrics_config = _config_to_metric_config(self._config)
-
+    self._run_interactions = 'interaction' in config.rewards.keys()
+    self.interaction_metric = InteractionMetric()
+    
   def compute(
       self,
       simulator_state: datatypes.SimulatorState,
@@ -55,8 +58,15 @@ class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
 
     reward_dict = {}
     for reward_metric_name, reward_weight in self._config.rewards.items():
+      if reward_metric_name == 'interaction':
+        continue
       metric_all_agents = all_metrics[reward_metric_name].masked_value()
-      reward_dict['reward_metric_name'] = metric_all_agents * agent_mask * reward_weight
+      reward_dict[reward_metric_name] = metric_all_agents * agent_mask * reward_weight
+      
+    # Run interaction metric if specified.
+    if self._run_interactions:
+      interaction_all_agents = self.interaction_metric.compute(simulator_state).masked_value()
+      reward_dict['interaction'] = interaction_all_agents * agent_mask * self._config.rewards['interaction']
 
     return reward_dict
 
@@ -66,7 +76,11 @@ def _validate_reward_metrics(config: _config.LinearCombinationRewardConfig):
   metrics_config = _config.MetricsConfig()
   metric_names_with_run = metrics_config.__dict__.keys()
   metric_names = set(name[4:] for name in metric_names_with_run)
+  # metric_names.add('interaction')
+  
   for reward_metric_name in config.rewards.keys():
+    if reward_metric_name == 'interaction':
+      continue
     if reward_metric_name not in metric_names:
       raise ValueError(
           f'Invalid metric name {reward_metric_name} was given to '
