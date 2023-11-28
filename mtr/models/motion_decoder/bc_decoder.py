@@ -19,8 +19,6 @@ class BCDecoder(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
         self.model_cfg = config
-        self.object_type = self.model_cfg.OBJECT_TYPE
-        self.num_future_frames = self.model_cfg.NUM_FUTURE_FRAMES
         self.num_motion_modes = self.model_cfg.NUM_MOTION_MODES
         self.d_model = self.model_cfg.D_MODEL
         self.n_head = self.model_cfg.NUM_ATTN_HEAD

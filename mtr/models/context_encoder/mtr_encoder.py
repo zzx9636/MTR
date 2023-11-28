@@ -144,7 +144,7 @@ class MTREncoder(nn.Module):
         ret_full_feature = ret_full_feature.view(batch_size, N, d_model)
         return ret_full_feature
 
-    def forward(self, batch_dict):
+    def forward(self, batch_dict, retain_input = True):
         """
         Args:
             batch_dict:
@@ -192,13 +192,18 @@ class MTREncoder(nn.Module):
         # organize return features
         # center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
         
-        batch_dict['track_index_to_predict'] = track_index_to_predict
+        if retain_input:
+            output_dict = batch_dict
+        else:
+            output_dict = {}
+            
+        output_dict['track_index_to_predict'] = track_index_to_predict
         # batch_dict['center_objects_feature'] = center_objects_feature
-        batch_dict['obj_feature'] = obj_polylines_feature
-        batch_dict['map_feature'] = map_polylines_feature
-        batch_dict['obj_mask'] = obj_valid_mask
-        batch_dict['map_mask'] = map_valid_mask
-        batch_dict['obj_pos'] = obj_trajs_last_pos
-        batch_dict['map_pos'] = map_polylines_center
+        output_dict['obj_feature'] = obj_polylines_feature
+        output_dict['map_feature'] = map_polylines_feature
+        output_dict['obj_mask'] = obj_valid_mask
+        output_dict['map_mask'] = map_valid_mask
+        output_dict['obj_pos'] = obj_trajs_last_pos
+        output_dict['map_pos'] = map_polylines_center
 
-        return batch_dict
+        return output_dict

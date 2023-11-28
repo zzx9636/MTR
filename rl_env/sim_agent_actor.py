@@ -55,6 +55,9 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         # del params, actor_state, rng
         
         is_controlled = self.is_controlled_func(state)
+        # update the state
+        state.object_metadata.is_modeled = is_controlled
+        state.object_metadata.is_controlled = is_controlled
         input_dict = self.process_input(state, is_controlled)
         input_dict_batch = collate_batch([input_dict])
         

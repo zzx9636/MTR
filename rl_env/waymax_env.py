@@ -9,7 +9,7 @@ import mediapy
 from tqdm import tqdm
 import dataclasses
 
-from waymax import config as waymax_config
+from waymax import config as waymax_config, config as _config, dynamics as _dynamics
 from waymax import dataloader
 from waymax import datatypes  
 from waymax import visualization
@@ -20,109 +20,61 @@ from waymax import agents
 from typing import Dict, Tuple
 
 from rl_env.env_utils import *
+from rl_env.dictionary_reward import DictionaryReward
 from tools.mtr_lightning import MTR_Lightning
+import tensorflow as tf
 
-class WaymaxEnv:
-    def __init__(self, config):
-        
-        # Load the config
-        self.config = config
-        self.init_steps = self.config.get('INIT_STEPS', 11)
-        self.history_length = self.config.get('HISTORY_LENGTH', 11)
-        self.max_num_objects = self.config.get('MAX_NUM_OBJECTS', 32)
-        self.dt = self.config.get('DT', 0.1)
-        self.dynamics_type = self.config.get('DYNAMICS_TYPE', 'DeltaLocal')
-        self.use_jit = self.config.get('USE_JIT', True)
-        self.timestamps = np.arange(self.history_length) * self.dt
-        
-        
-        if self.dynamics_type == 'DeltaLocal':
-            dynamics_model = dynamics.DeltaLocal()
-        elif self.dynamics_type == 'DeltaGlobal':
-            dynamics_model = dynamics.DeltaGlobal()
-        elif self.dynamics_type == 'Bicycle':
-            dynamics_model = dynamics.InvertibleBicycleModel()
-        elif self.dynamics_type == 'StateDynamics':
-            dynamics_model = dynamics.StateDynamics()
-        else:
-            raise ValueError(f'Unknown dynamics type: {self.dynamics_type}')
-            
-        
-        # Construct the simulator
-        # TODO: This controlled_object is related to how reward is calculated, so we need to explicitly figure it out
-        self.env = waymax_env.MultiAgentEnvironment(
-            dynamics_model=dynamics_model,
-            config=dataclasses.replace(
-                waymax_config.EnvironmentConfig(),
-                max_num_objects=self.max_num_objects,
-                init_steps = self.init_steps,
-                allow_new_objects_after_warmup=True,
-                controlled_object=waymax_config.ObjectType.VALID,
-            ),
+def womd_loader(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
+    # Write a custom dataloader that loads scenario IDs.
+    def _preprocess(serialized: bytes) -> dict[str, tf.Tensor]:
+        womd_features = dataloader.womd_utils.get_features_description(
+            include_sdc_paths=data_config.include_sdc_paths,
+            max_num_rg_points=data_config.max_num_rg_points,
+            num_paths=data_config.num_paths,
+            num_points_per_path=data_config.num_points_per_path,
+        )
+        womd_features['scenario/id'] = tf.io.FixedLenFeature([1], tf.string)
+
+        deserialized = tf.io.parse_example(serialized, womd_features)
+        parsed_id = deserialized.pop('scenario/id')
+        deserialized['scenario/id'] = tf.io.decode_raw(parsed_id, tf.uint8)
+        # print(deserialized['scenario/id'].tobytes())
+        return dataloader.preprocess_womd_example(
+            deserialized,
+            aggregate_timesteps=data_config.aggregate_timesteps,
+            max_num_objects=data_config.max_num_objects,
         )
         
-        # Jit-ify the simulator
-        if self.use_jit:
-            self.env_step = jit(self.env.step)
-        else:
-            self.env_step = self.env.step
-            
-        # Load Model
-        self.model = MTR_Lightning(self.config)
-        
-    def reset(self, scenario: datatypes.SimulatorState) -> Tuple[datatypes.SimulatorState, Dict]:
-        """
-        Resets the environment to the initial state and returns the initial state and input dictionary.
-
-        Args:
-            scenario (datatypes.SimulatorState): The initial state of the simulator.
-
-        Returns:
-            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the initial state of the simulator and the input
-            dictionary.
-        """
-        simulation_state: datatypes.SimulatorState = self.env.reset(scenario)
-        input_dict: dict = self.process_input(simulation_state)
-        
-        return simulation_state, input_dict
-
-    def step(self, prev_state: datatypes.SimulatorState, action: datatypes.Action) -> Tuple[datatypes.SimulatorState, Dict]:
-        """
-        Steps the environment forward using the given action and returns the next state and input dictionary.
-
-        Args:
-            prev_state (datatypes.SimulatorState): The previous state of the simulator.
-            action (np.ndarray): The action to take.
-
-        Returns:
-            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the next state of the simulator and the input
-            dictionary.
-        """
-        simulation_state: datatypes.SimulatorState = self.env.step(prev_state, action)
-        input_dict: dict = self.process_input(simulation_state)
-        
-        return simulation_state, input_dict
+    def _postprocess(example: dict[str, tf.Tensor]):
+        scenario = dataloader.simulator_state_from_womd_dict(example)
+        scenario_id = example['scenario/id']
+        return scenario_id, scenario
     
-    def observe(self, scenario: datatypes.SimulatorState) -> Tuple[datatypes.SimulatorState, Dict]:
+    def decode_bytes(data_iter):
+        for scenario_id, scenario in data_iter:
+            scenario_id = scenario_id.tobytes().decode('utf-8')
+            yield scenario_id, scenario
+            
+    return decode_bytes(dataloader.get_data_generator(
+            data_config, _preprocess, _postprocess
+        ))
+ 
+class MultiAgentEnvironment(waymax_env.BaseEnvironment):
+    def __init__(
+            self,
+            dynamics_model: dynamics.DynamicsModel,
+            config: _config.EnvironmentConfig
+        ):
         """
-        Observe the current state of the environment.
+        Initializes a new instance of the WaymaxEnv class.
 
         Args:
-            scenario (datatypes.SimulatorState): The current state of the simulator.
-
-        Returns:
-            Tuple[datatypes.SimulatorState, Dict]: A tuple containing the current state of the simulator and a dictionary of processed inputs.
+            dynamics_model (dynamics.DynamicsModel): The dynamics model used for simulating the environment.
+            config (_config.EnvironmentConfig): The configuration object for the environment.
         """
-        input_dict: dict = self.process_input(scenario)
+        super().__init__(dynamics_model, config)
         
-        return scenario, input_dict
+        # override the reward function with the dictionary reward function
+        self._reward_function = DictionaryReward(config.rewards)
         
-   
-        """Converts object type from int to string"""
-        
-        str_map = ['TYPE_UNSET', 'TYPE_VEHICLE', 'TYPE_PEDESTRIAN', 'TYPE_CYCLIST', 'TYPE_OTHER']
-        
-        obj_types_int = obj_metadata.object_types
-        obj_types_str = np.array([str_map[i] for i in obj_types_int])
-        
-        return obj_types_str
+    
