@@ -21,7 +21,8 @@ from waymax import datatypes
 from waymax import metrics
 from waymax.rewards import abstract_reward_function
 from typing import Dict
-from rl_env.interaction_metric import InteractionMetric
+from rl_env.overlap_metric import OverlapMetric
+from rl_env.offroad_metric import OffroadMetric
 
 class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
   """Reward function that store metrics into a dictionary."""
@@ -31,8 +32,10 @@ class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
     
     self._config = config
     self._metrics_config = _config_to_metric_config(self._config)
-    self._run_interactions = 'interaction' in config.rewards.keys()
-    self.interaction_metric = InteractionMetric()
+    self._run_overlap = 'overlap' in config.rewards.keys()
+    self._run_offroad = 'offroad' in config.rewards.keys()
+    self.overlap_metric = OverlapMetric()
+    self.offroad_metric = OffroadMetric()
     
   def compute(
       self,
@@ -58,15 +61,17 @@ class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
 
     reward_dict = {}
     for reward_metric_name, reward_weight in self._config.rewards.items():
-      if reward_metric_name == 'interaction':
-        continue
       metric_all_agents = all_metrics[reward_metric_name].masked_value()
       reward_dict[reward_metric_name] = metric_all_agents * agent_mask * reward_weight
       
     # Run interaction metric if specified.
-    if self._run_interactions:
-      interaction_all_agents = self.interaction_metric.compute(simulator_state).masked_value()
-      reward_dict['interaction'] = interaction_all_agents * agent_mask * self._config.rewards['interaction']
+    if self._run_overlap:
+      interaction_all_agents = self.overlap_metric.compute(simulator_state).masked_value()
+      reward_dict['overlap'] = interaction_all_agents * agent_mask * self._config.rewards['overlap']
+    
+    if self._run_offroad:
+      offroad_all_agents = self.offroad_metric.compute(simulator_state).masked_value()
+      reward_dict['offroad'] = offroad_all_agents * agent_mask * self._config.rewards['offroad']
 
     return reward_dict
 
@@ -79,8 +84,6 @@ def _validate_reward_metrics(config: _config.LinearCombinationRewardConfig):
   # metric_names.add('interaction')
   
   for reward_metric_name in config.rewards.keys():
-    if reward_metric_name == 'interaction':
-      continue
     if reward_metric_name not in metric_names:
       raise ValueError(
           f'Invalid metric name {reward_metric_name} was given to '
@@ -97,6 +100,11 @@ def _config_to_metric_config(
   temp_metrics_configs = _config.MetricsConfig()
   metric_flags = {}
   for metric_name in temp_metrics_configs.__dict__.keys():
+    # Overriding the overlap metric with the offroad metric.
+    if metric_name == 'overlap':
+      continue
+    if metric_name == 'offroad':
+      continue
     # MetricsConfig attributes are stored as f'run_{metric}'. The following line
     # removes 'run_' from the name and checks if the metric is present in the
     # reward config. If so, the metric is stored in the dictionary as True,

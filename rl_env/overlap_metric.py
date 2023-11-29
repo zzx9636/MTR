@@ -33,8 +33,8 @@ def minkowski_sum_of_box_and_box_points(box1_points: np.ndarray,
         num_points_per_box * 2, 2). The points will be stored in counter-clockwise
         order.
     """
-    NUM_BOX_1 = box1_points.shape[0]
-    NUM_BOX_2 = box2_points.shape[0]
+    # NUM_BOX_1 = box1_points.shape[0]
+    # NUM_BOX_2 = box2_points.shape[0]
     NUM_VERTICES_IN_BOX = box1_points.shape[1]
     assert NUM_VERTICES_IN_BOX == 4, "Only support boxes"
     # Hard coded order to pick points from the two boxes. This is a simplification
@@ -77,7 +77,7 @@ def minkowski_sum_of_box_and_box_points(box1_points: np.ndarray,
     box2_point_order = np.mod(box2_point_order + box2_start_idx,
                                     NUM_VERTICES_IN_BOX)
     ordered_box2_points = np.take_along_axis(box2_points, box2_point_order, axis=-2)
-    # ordered_box2_points = box2_points[np.arange(NUM_BOX_2), box2_point_order, :]
+
     minkowski_sum = ordered_box1_points + ordered_box2_points
     return minkowski_sum
 
@@ -234,10 +234,10 @@ def signed_distance_from_point_to_convex_polygon(
     signed_distances = np.where(is_inside, -min_distance, min_distance)
     return signed_distances
 
-class InteractionMetric(abstract_metric.AbstractMetric):
-    """Interaction metric.
+class OverlapMetric(abstract_metric.AbstractMetric):
+    """Overlap metric.
     
-    This metric returns 1.0 if an object's bounding box is overlapping with
+    This metric returns negative if an object's bounding box is overlapping with
     that of another object.
     """
     
@@ -251,9 +251,9 @@ class InteractionMetric(abstract_metric.AbstractMetric):
             1,
             -1,
         )
-        return self.compute_interaction(current_object_state)
+        return self.compute_overlap(current_object_state)
     
-    def compute_interaction(
+    def compute_overlap(
         self, current_traj: datatypes.Trajectory
     ) -> abstract_metric.MetricResult:
         """Computes the interaction metric.
