@@ -76,10 +76,10 @@ class JointPolicy(nn.Module):
         Returns:
             encoder_dict: The batch dictionary with the context encoding added.
         """
-        encoder_dict = self.context_encoder(batch_dict)
+        encoder_dict = self.context_encoder(batch_dict, retain_input = False)
         return encoder_dict
     
-    def forward_decoder(self, encoder_dict: Dict, batch_decoder_mapping: Dict):
+    def forward_decoder(self, encoder_dict: Dict, batch_decoder_mapping: Dict = None):
         """
         Forward pass through the motion decoder.
 
@@ -92,18 +92,20 @@ class JointPolicy(nn.Module):
         output_dict = {}
         for name, decoder in zip(self.decoder_name_list, self.motion_decoder_list):
             # Extract the batch data for the current decoder
-            idx = batch_decoder_mapping[name]
-            
-            decoder_input_dict = {
-                'track_index_to_predict': encoder_dict['track_index_to_predict'][idx],
-                'obj_feature': encoder_dict['obj_feature'][idx],
-                'obj_pos': encoder_dict['obj_pos'][idx],
-                'obj_mask': encoder_dict['obj_mask'][idx],
-                'map_feature': encoder_dict['map_feature'][idx],
-                'map_pos': encoder_dict['map_pos'][idx],
-                'map_mask': encoder_dict['map_mask'][idx],
-            }
-            
+            if batch_decoder_mapping is not None:
+                idx = batch_decoder_mapping[name]
+                
+                decoder_input_dict = {
+                    'track_index_to_predict': encoder_dict['track_index_to_predict'][idx],
+                    'obj_feature': encoder_dict['obj_feature'][idx],
+                    'obj_pos': encoder_dict['obj_pos'][idx],
+                    'obj_mask': encoder_dict['obj_mask'][idx],
+                    'map_feature': encoder_dict['map_feature'][idx],
+                    'map_pos': encoder_dict['map_pos'][idx],
+                    'map_mask': encoder_dict['map_mask'][idx],
+                }
+            else:
+                decoder_input_dict = encoder_dict
             output_dict[name] = decoder(decoder_input_dict)
         return output_dict
     
@@ -136,8 +138,9 @@ class JointPolicy(nn.Module):
             cur_decoder = self.motion_decoder_list[i]
             
             pred_ctrls, pred_scores = batch_dict['pred_list'][-1]
-            mode, mix, _ = cur_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
+            mode, mix, gmm = cur_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
             
+            # sample_action = gmm.sample()
             mode: torch.distributions.MultivariateNormal
             mix: torch.distributions.Categorical
             
@@ -195,7 +198,7 @@ class JointPolicy(nn.Module):
             
             sample = sample * cur_decoder.output_std + cur_decoder.output_mean
             
-            sample_dict['sample'] = sample
+            sample_dict[name] = {'sample': sample}
         
         return sample_dict
     

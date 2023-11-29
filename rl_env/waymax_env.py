@@ -17,12 +17,16 @@ from waymax import dynamics
 from waymax import env as waymax_env
 from waymax import agents
 
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
+
+from waymax.env import typedefs as types
 
 from rl_env.env_utils import *
-from rl_env.dictionary_reward import DictionaryReward
+from rl_env.rewards.dictionary_reward import DictionaryReward
 from tools.mtr_lightning import MTR_Lightning
 import tensorflow as tf
+
+DEFAULT_AGENT_FILTER = lambda state: state.object_metadata.is_modeled
 
 def womd_loader(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
     # Write a custom dataloader that loads scenario IDs.
@@ -63,7 +67,8 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
     def __init__(
             self,
             dynamics_model: dynamics.DynamicsModel,
-            config: _config.EnvironmentConfig
+            config: _config.EnvironmentConfig,
+            agent_filter=DEFAULT_AGENT_FILTER,
         ):
         """
         Initializes a new instance of the WaymaxEnv class.
@@ -79,5 +84,26 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
         self._reward_function = DictionaryReward(config.rewards)
         self._dynamics_model = dynamics_model
         self.config = config
+        
+        self.gt_actor = agents.create_expert_actor(
+            dynamics_model=dynamics_model,
+            is_controlled_func=lambda state: agent_filter(state),
+        )
+        
+        # Useful jited functions
+        self.jit_step = jit(self.step)
+        self.jit_gt_action = jit(self.gt_actor.select_action)
+        
+    def step_sim_agent(
+        current_state: datatypes.SimulatorState,
+        sim_agent_action: Union[np.ndarray, jax.Array],
+        
+        ) -> datatypes.SimulatorState:
+        """
+        Steps the simulation agent.
+        """
+        pass
+        
+    
         
     
