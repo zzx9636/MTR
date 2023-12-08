@@ -65,9 +65,6 @@ class BaseTraining(ABC):
     os.makedirs(self.figure_folder, exist_ok=True)
     self.use_wandb = bool(cfg_solver.use_wandb)
 
-  def build_memory(self, capacity: int, seed: int):
-    self.memory = ReplayMemory(capacity, seed)
-
   def sample_batch(self, batch_size: Optional[int] = None, recent_size: int = 0):
     if batch_size is None:
       batch_size = self.batch_size
@@ -78,25 +75,21 @@ class BaseTraining(ABC):
     # TODO: Determine where to put collect_batch
     return collect_batch(list_batch, self.device)
 
-  def store_transition(self, *args):
-    self.memory.update(self.transition_cls(*args))
+  # @abstractmethod
+  # def sample(self, obsrv_all: torch.Tensor) -> Union[np.ndarray, List[Dict[str, np.ndarray]]]:
+  #   """Samples actions given the current observations.
 
-  @abstractmethod
-  def sample(self, obsrv_all: torch.Tensor) -> Union[np.ndarray, List[Dict[str, np.ndarray]]]:
-    """Samples actions given the current observations.
+  #   Args:
+  #       obsrv_all (torch.Tensor): current observaions of all environments.
 
-    Args:
-        obsrv_all (torch.Tensor): current observaions of all environments.
-
-    Returns:
-        np.ndarray or List[Dict[str, np.ndarray]]: actions to execute.
-    """
-    raise NotImplementedError
+  #   Returns:
+  #       np.ndarray or List[Dict[str, np.ndarray]]: actions to execute.
+  #   """
+  #   raise NotImplementedError
 
   @abstractmethod
   def interact(
-      self, rollout_env: Union[BaseEnv, VecEnvBase], obsrv_all: torch.Tensor,
-      action_all: Union[np.ndarray, List[Dict[str, np.ndarray]]]
+      self, obsrv_all: Optional[dict[str, torch.Tensor]],
   ):
     raise NotImplementedError
 
@@ -123,16 +116,11 @@ class BaseTraining(ABC):
       self.eval(env, rollout_env, eval_callback, init_eval=True)
 
     start_learning = time.time()
-    if self.num_envs == 1:
-      obsrv_all = rollout_env.reset(cast_torch=True)[None]
-    else:
-      obsrv_all = rollout_env.reset()
+    obsrv_all = None 
+    
     while self.cnt_step <= self.max_steps:
-      # Samples actions
-      action_all = self.sample(obsrv_all)
-
-      # Interacts with the env.
-      obsrv_all = self.interact(rollout_env, obsrv_all, action_all)
+      # Interacts with the env and sample transitions.
+      obsrv_all = self.interact(obsrv_all)
 
       # Optimizes actor and critic.
       self.update()
@@ -141,14 +129,10 @@ class BaseTraining(ABC):
       if eval_callback is not None:
         eval_flag = self.eval(env, rollout_env, eval_callback)
         if eval_flag:  # Resets anyway.
-          if self.num_envs == 1:
-            obsrv_all = rollout_env.reset(cast_torch=True)[None]
-          else:
-            obsrv_all = rollout_env.reset()
+          obsrv_all = None
 
       # Updates gamma, lr, etc.
-      for _ in range(self.num_envs):
-        self.update_hyper_param()
+      self.update_hyper_param()
 
     end_learning = time.time()
     time_learning = end_learning - start_learning

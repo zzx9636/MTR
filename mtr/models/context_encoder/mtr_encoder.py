@@ -192,11 +192,7 @@ class MTREncoder(nn.Module):
         # organize return features
         # center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
         
-        if retain_input:
-            output_dict = batch_dict
-        else:
-            output_dict = {}
-            
+        output_dict = {}
         output_dict['track_index_to_predict'] = track_index_to_predict
         # batch_dict['center_objects_feature'] = center_objects_feature
         output_dict['obj_feature'] = obj_polylines_feature
@@ -205,5 +201,26 @@ class MTREncoder(nn.Module):
         output_dict['map_mask'] = map_valid_mask
         output_dict['obj_pos'] = obj_trajs_last_pos
         output_dict['map_pos'] = map_polylines_center
-
+        
+        if retain_input:
+            output_dict.update(batch_dict)
+        else:
+            del batch_dict
+            
         return output_dict
+
+    def load_model(
+        self,
+        state_dict: dict
+    ):
+        model_keys = self.state_dict().keys()  
+        state_dict_filtered = {}
+        # search for the weights in the state_dict_to_load and save to a new dict
+        for key in model_keys:
+            for state_key in state_dict.keys():
+                if state_key.endswith(key):
+                    state_dict_filtered[key] = state_dict[state_key]
+                    break
+                
+        # load the filtered state_dict
+        self.load_state_dict(state_dict_filtered, strict=True)

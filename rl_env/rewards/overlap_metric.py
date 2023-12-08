@@ -263,7 +263,7 @@ class OverlapMetric(abstract_metric.AbstractMetric):
             num_objects, num_timesteps=1).
     
         Returns:
-        A (..., num_objects) MetricResult.
+        A (num_objects, num_objects) MetricResult of pairwise distance.
         """
         traj_5dof = current_traj.stack_fields(['x', 'y', 'length', 'width', 'yaw'])
         num_obj = traj_5dof.shape[0]
@@ -288,12 +288,10 @@ class OverlapMetric(abstract_metric.AbstractMetric):
         
         # Remove Invalid objects
         valid = current_traj.valid[..., 0] # Shape: (num_objects,)
-        signed_distance[~valid, :] = 1e3
-        signed_distance[:, ~valid] = 1e3
-        
-        # Find the minimum signed distance for each object
-        min_signed_distance = jnp.min(signed_distance, axis=-1).astype(jnp.float32)
-        
+        valid = jnp.outer(valid, valid) # Shape: (num_objects, num_objects)
+        valid = valid * ~jnp.eye(num_obj, dtype=jnp.bool_) # Shape: (num_objects, num_objects)
+        signed_distance[~valid] = 1e3
+                
         return abstract_metric.MetricResult.create_and_validate(
-            min_signed_distance, valid
+            value = jnp.asarray(signed_distance), valid = valid
         )    

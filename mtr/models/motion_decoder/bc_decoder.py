@@ -27,7 +27,10 @@ class BCDecoder(nn.Module):
         self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
         
         # Build the query
-        self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
+        self.query = nn.Parameter(
+            torch.randn(self.num_motion_modes, self.d_model),
+            requires_grad=True
+        )
         
         # Project the input to a higher dimension
         self.in_proj_center_obj = nn.Sequential(
@@ -314,3 +317,20 @@ class BCDecoder(nn.Module):
         batch_dict['pred_list'] = pred_list
         return batch_dict
     
+    def load_model(
+        self,
+        state_dict: dict
+    ):
+        
+        model_keys = self.state_dict().keys()
+        
+        state_dict_filtered = {}
+        # search for the weights in the state_dict_to_load and save to a new dict
+        for key in model_keys:
+            for state_key in state_dict.keys():
+                if state_key.endswith(key):
+                    state_dict_filtered[key] = state_dict[state_key]
+                    break
+                
+        # load the filtered state_dict
+        self.load_state_dict(state_dict_filtered, strict=True)

@@ -25,8 +25,8 @@ from rl_env.rewards.overlap_metric import OverlapMetric
 from rl_env.rewards.offroad_metric import OffroadMetric
 from rl_env.rewards.kinematics_metric import KinematicsFeasibilityMetric
 
-class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
-  """Reward function that store metrics into a dictionary."""
+class ReachAvoidMetrics(abstract_reward_function.AbstractRewardFunction):
+  """Metrics function that store metrics into a dictionary."""
 
   def __init__(self, config: _config.LinearCombinationRewardConfig):
     
@@ -42,37 +42,27 @@ class DictionaryReward(abstract_reward_function.AbstractRewardFunction):
   def compute(
       self,
       simulator_state: datatypes.SimulatorState,
-      action: datatypes.Action,
-      agent_mask: jax.Array,
   ) -> Dict[str, jax.Array]:
     """Computes the reward as a linear combination of metrics.
 
     Args:
       simulator_state: State of the Waymax environment.
-      action: Action taken to control the agent(s) (..., num_objects,
-        action_space).
-      agent_mask: Binary mask indicating which agent inputs are valid (...,
-        num_objects).
-
+      
     Returns:
-      An array of rewards, where there is one reward per agent
+      An dictionary of metrics, where there is one reward per agent
       (..., num_objects).
     """
-    del action  # unused
 
     reward_dict = {}
       
     # Run interaction metric if specified.
     if self._run_overlap:
-      interaction_all_agents = self.overlap_metric.compute(simulator_state).masked_value()
-      reward_dict['overlap'] = interaction_all_agents * agent_mask * self._config.rewards['overlap']
+      reward_dict['overlap'] = self.overlap_metric.compute(simulator_state) 
     
     if self._run_offroad:
-      offroad_all_agents = self.offroad_metric.compute(simulator_state).masked_value()
-      reward_dict['offroad'] = offroad_all_agents * agent_mask * self._config.rewards['offroad']
+      reward_dict['offroad'] = self.offroad_metric.compute(simulator_state)
       
-    if self._run_kinemetics:
-      kinematics_all_agents = self.kinematics_metric.compute(simulator_state).masked_value()
-      reward_dict['kinematics'] = kinematics_all_agents * agent_mask * self._config.rewards['kinematics']
+    if self._run_kinemetics: 
+      reward_dict['kinematics'] = self.kinematics_metric.compute(simulator_state)
 
     return reward_dict

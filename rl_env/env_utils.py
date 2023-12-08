@@ -3,10 +3,120 @@ import numpy as np
 import torch
 from mtr.utils import common_utils
 from waymax import datatypes
+from waymax.agents import actor_core
+from waymax import dataloader
+from waymax import config as waymax_config
+import tensorflow as tf
+import numpy as np
+import jax
+from jax import numpy as jnp
 
 from rl_env.env_utils import *
 
 from typing import Dict, Tuple
+
+def womd_loader(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
+    # Write a custom dataloader that loads scenario IDs.
+    def _preprocess(serialized: bytes) -> dict[str, tf.Tensor]:
+        womd_features = dataloader.womd_utils.get_features_description(
+            include_sdc_paths=data_config.include_sdc_paths,
+            max_num_rg_points=data_config.max_num_rg_points,
+            num_paths=data_config.num_paths,
+            num_points_per_path=data_config.num_points_per_path,
+        )
+        womd_features['scenario/id'] = tf.io.FixedLenFeature([1], tf.string)
+
+        deserialized = tf.io.parse_example(serialized, womd_features)
+        parsed_id = deserialized.pop('scenario/id')
+        deserialized['scenario/id'] = tf.io.decode_raw(parsed_id, tf.uint8)
+        # print(deserialized['scenario/id'].tobytes())
+        return dataloader.preprocess_womd_example(
+            deserialized,
+            aggregate_timesteps=data_config.aggregate_timesteps,
+            max_num_objects=data_config.max_num_objects,
+        )
+        
+    def _postprocess(example: dict[str, tf.Tensor]):
+        scenario = dataloader.simulator_state_from_womd_dict(example)
+        scenario_id = example['scenario/id']
+        return scenario_id, scenario
+    
+    def decode_bytes(data_iter):
+        with tf.device('/cpu:0'):
+            for scenario_id, scenario in data_iter:
+                scenario_id = scenario_id.tobytes().decode('utf-8')
+                yield scenario_id, scenario
+    # Force use CPU
+    return decode_bytes(dataloader.get_data_generator(
+            data_config, _preprocess, _postprocess
+        ))
+        
+def action_to_waymax_action(sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
+    """Converts a action [dx, dy, dyaw] to an waymax action."""
+    actions_array = np.zeros((is_controlled.shape[0], 3))
+    actions_array[is_controlled] = sample
+    actions_valid = jnp.asarray(is_controlled[...,None])
+    
+    actions = datatypes.Action(data=jnp.asarray(actions_array), valid=actions_valid)
+    
+    return actor_core.WaymaxActorOutput(
+        action=actions,
+        actor_state=None,
+        is_controlled=is_controlled,
+    )
+    
+def encoder_collate_batch(batch_list):
+    """
+    Args:
+    batch_list:
+        scenario_id: (num_center_objects)
+        track_index_to_predict (num_center_objects):
+
+        obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
+        obj_trajs_mask (num_center_objects, num_objects, num_timestamps):
+        map_polylines (num_center_objects, num_polylines, num_points_each_polyline, 9): [x, y, z, dir_x, dir_y, dir_z, global_type, pre_x, pre_y]
+        map_polylines_mask (num_center_objects, num_polylines, num_points_each_polyline)
+
+        obj_trajs_pos: (num_center_objects, num_objects, num_timestamps, 3)
+        obj_trajs_last_pos: (num_center_objects, num_objects, 3)
+        obj_types: (num_objects)
+        obj_ids: (num_objects)
+
+        center_objects_world: (num_center_objects, 10)  [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
+        center_objects_type: (num_center_objects)
+        center_objects_id: (num_center_objects)
+    """
+    batch_size = len(batch_list)
+    key_to_list = {}
+    for key in batch_list[0].keys():
+        key_to_list[key] = [batch_list[bs_idx][key] for bs_idx in range(batch_size)]
+
+    input_dict = {}
+    for key, val_list in key_to_list.items():
+        if key == 'obj_trajs':
+            batch_env_idx = np.concatenate([np.ones(x.shape[0])*i for i, x in enumerate(val_list)], axis=0)
+            
+        if key in ['obj_trajs', 'obj_trajs_mask', 'map_polylines', 'map_polylines_mask', 'map_polylines_center',
+            'obj_trajs_pos', 'obj_trajs_last_pos']:
+            val_list = [torch.from_numpy(x) for x in val_list]
+            if 'mask' in key:
+                input_dict[key] = common_utils.merge_batch_by_padding_2nd_dim(val_list).bool()
+            else:
+                input_dict[key] = common_utils.merge_batch_by_padding_2nd_dim(val_list).float()
+        elif key in ['scenario_id', 'obj_types', 'obj_ids', 'center_objects_type', 'center_objects_id']:
+            input_dict[key] = np.concatenate(val_list, axis=0)
+        else:
+            val_list = [torch.from_numpy(x) for x in val_list]
+            input_dict[key] = torch.cat(val_list, dim=0)
+            
+    batch_sample_count = [len(x['track_index_to_predict']) for x in batch_list]
+    batch_dict = {
+        'batch_size': batch_size, 
+        'input_dict': input_dict,
+        'batch_sample_count': batch_sample_count,
+        'batch_env_idx': batch_env_idx,
+        }
+    return batch_dict
 
 def process_input(
     scenario: datatypes.SimulatorState,
@@ -19,7 +129,10 @@ def process_input(
 
     Args:
         scenario (datatypes.SimulatorState): The simulator state.
-
+        is_controlled (np.ndarray): A boolean array indicating which objects are controlled.
+        history_length (int, optional): The number of timesteps to extract. Defaults to 11.
+        dt (float, optional): The timestep. Defaults to 0.1.
+        
     Returns:
         Dict: A dictionary containing the extracted scene data.
     """
@@ -457,56 +570,3 @@ def create_map_data_for_center_objects(center_objects, polylines, center_offset)
     map_polylines_center = map_polylines_center.numpy()
 
     return map_polylines, map_polylines_mask, map_polylines_center
-
-def collate_batch(batch_list):
-    """
-    Args:
-    batch_list:
-        scenario_id: (num_center_objects)
-        track_index_to_predict (num_center_objects):
-
-        obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
-        obj_trajs_mask (num_center_objects, num_objects, num_timestamps):
-        map_polylines (num_center_objects, num_polylines, num_points_each_polyline, 9): [x, y, z, dir_x, dir_y, dir_z, global_type, pre_x, pre_y]
-        map_polylines_mask (num_center_objects, num_polylines, num_points_each_polyline)
-
-        obj_trajs_pos: (num_center_objects, num_objects, num_timestamps, 3)
-        obj_trajs_last_pos: (num_center_objects, num_objects, 3)
-        obj_types: (num_objects)
-        obj_ids: (num_objects)
-
-        center_objects_world: (num_center_objects, 10)  [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
-        center_objects_type: (num_center_objects)
-        center_objects_id: (num_center_objects)
-    """
-    batch_size = len(batch_list)
-    key_to_list = {}
-    for key in batch_list[0].keys():
-        key_to_list[key] = [batch_list[bs_idx][key] for bs_idx in range(batch_size)]
-
-    input_dict = {}
-    for key, val_list in key_to_list.items():
-        if key == 'obj_trajs':
-            batch_env_idx = np.concatenate([np.ones(x.shape[0])*i for i, x in enumerate(val_list)], axis=0)
-            
-        if key in ['obj_trajs', 'obj_trajs_mask', 'map_polylines', 'map_polylines_mask', 'map_polylines_center',
-            'obj_trajs_pos', 'obj_trajs_last_pos']:
-            val_list = [torch.from_numpy(x) for x in val_list]
-            if 'mask' in key:
-                input_dict[key] = common_utils.merge_batch_by_padding_2nd_dim(val_list).bool()
-            else:
-                input_dict[key] = common_utils.merge_batch_by_padding_2nd_dim(val_list).float()
-        elif key in ['scenario_id', 'obj_types', 'obj_ids', 'center_objects_type', 'center_objects_id']:
-            input_dict[key] = np.concatenate(val_list, axis=0)
-        else:
-            val_list = [torch.from_numpy(x) for x in val_list]
-            input_dict[key] = torch.cat(val_list, dim=0)
-            
-    batch_sample_count = [len(x['track_index_to_predict']) for x in batch_list]
-    batch_dict = {
-        'batch_size': batch_size, 
-        'input_dict': input_dict,
-        'batch_sample_count': batch_sample_count,
-        'batch_env_idx': batch_env_idx,
-        }
-    return batch_dict
