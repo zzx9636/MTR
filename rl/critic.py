@@ -19,7 +19,7 @@ class Critic(nn.Module):
   def __init__(self, 
     cfg,
     q_network: nn.Module,
-    device: torch.device = torch.device('cuda')
+    device: torch.device = 'cuda'
   ) -> None:
     nn.Module.__init__(self)
     
@@ -125,7 +125,7 @@ class Critic(nn.Module):
     Returns:
         float: critic loss.
     """
-
+    done = done.float()
     # Gets Bellman update.
     y = self.get_bellman_update(
       q_next=q_next,
@@ -136,9 +136,12 @@ class Critic(nn.Module):
       binary_cost=binary_cost
     )
     
+    
     if self.entropy_reg:
-      y += (1-done)*self.gamma * entropy_motives
+      y += (1.0-done)*self.gamma * entropy_motives
 
+    # Repeat y
+    y = y.unsqueeze(-1).repeat(1, q.shape[-1])
     # Regresses MSE loss for both Q1 and Q2.
     loss = mse_loss(input=q, target=y, reduction='none')
     
@@ -177,7 +180,6 @@ class Critic(nn.Module):
     # Conservative target Q values: if the control policy
     # we want to learn is to maximize, we take the minimum of the two
     # Q values. Otherwise, we take the maximum.
-    
     assert len(q_next.shape) == 2, "q_next should be [num_agent, num_q]"
     if self.mode == 'risk':
       target_q = torch.max(q_next, dim=-1)[0]
@@ -201,7 +203,7 @@ class Critic(nn.Module):
       y = reward + self.gamma * target_q * (1-done)
     elif self.mode == 'risk':
       y = binary_cost + self.gamma * target_q * (1-done)
-    return y.unsqueeze(-1)
+    return y
 
   def soft_update(self, target_model, tau):
     """Soft update model parameters.

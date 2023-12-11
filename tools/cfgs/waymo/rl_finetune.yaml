@@ -1,37 +1,3 @@
-DATA_CONFIG:
-    DATASET: WaymoDataset
-    OBJECT_TYPE: &object_type ['TYPE_VEHICLE']
-    
-    DATA_ROOT: '/Data/Dataset/MTR'
-    SPLIT_DIR: {
-        'train': 'processed_scenarios_training', 
-        'test': 'processed_scenarios_validation'
-    }
-
-    INFO_FILE: {
-        'train': 'processed_scenarios_training_infos.pkl', 
-        'test': 'processed_scenarios_val_infos.pkl'
-    }
-
-    SAMPLE_INTERVAL: {
-        'train': 1, 
-        'test': 1
-    }
-
-    SHIFT_TIME: False
-
-    INFO_FILTER_DICT: 
-        filter_info_by_object_type: *object_type
-
-   # for map feature encoding
-    POINT_SAMPLED_INTERVAL: 1
-    NUM_POINTS_EACH_POLYLINE: 20
-    VECTOR_BREAK_DIST_THRESH: 1.0
-    NUM_TIME_SAMPLES: 5
-
-    NUM_OF_SRC_POLYLINES: 768
-    CENTER_OFFSET_OF_MAP: &center_offset [0.0, 0]
-
 MODEL:
     CONTEXT_ENCODER:
         NAME: MTREncoder
@@ -128,18 +94,16 @@ SAC:
         GAMMA_DECAY: 0.5
         GAMMA_END: 0.000001
 
-
-OPTIMIZATION:
-    BATCH_SIZE_PER_GPU: 8
-    NUM_EPOCHS: 20
-
-    OPTIMIZER: AdamW
-    LR: 0.0001
-    WEIGHT_DECAY: 0.01
-
-    SCHEDULER: lambdaLR
-    DECAY_STEP_LIST: [6, 8, 10, 12, 14, 16, 18]
-    LR_DECAY: 0.5
-    LR_CLIP: 0.000001
-
-    GRAD_NORM_CLIP: 1000.0
+    RL:
+        MAX_STEPS: 1_000_000
+        OPT_PERIOD: 100
+        MIN_STEP_BEFORE_TRAIN: 100
+        NUM_UPDATES: 100
+        BATCH_SIZE: 8
+        EVAL_PERIOD: 10_000
+        ACTOR_UPDATE_PERIOD: 1    
+        SOFT_UPDATE_PERIOD: 1
+        SOFT_UPDATE_TAU: 0.005
+        MEMORY_SIZE: 10_000
+        OUT_DIR: 'output/rl_finetune'
+        USE_WANDB: True

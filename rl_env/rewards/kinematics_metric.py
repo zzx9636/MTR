@@ -100,7 +100,7 @@ class KinematicsFeasibilityMetric(abstract_metric.AbstractMetric):
     steering = action_array[..., 1]
     
     # Acceleration Infeasibility
-    
+    print("accel: ", accel)
     accel_infeasibility = jnp.abs(accel) / self._max_acc - 1.0
     steering_infeasibility = jnp.abs(steering) / self._max_steering - 1.0
     # We do a max of the two infeasibility metrics.

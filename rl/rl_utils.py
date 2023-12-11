@@ -2,7 +2,6 @@ from typing import Dict, List, Union
 import numpy as np
 import torch
 from collections import deque
-
 class StepLRMargin():
   def __init__(
       self, init_value, period, goal_value, decay=0.1, end_value=None,
@@ -53,18 +52,17 @@ class ReplayMemory(object):
   def sample(self, batch_size):
     length = len(self.memory)
     indices = self.rng.integers(low=0, high=length, size=(batch_size,))
-    return [self.memory[i] for i in indices]
+    return collect_batch([self.memory[i] for i in indices])
 
   def sample_recent(self, batch_size, recent_size):
     recent_size = min(len(self.memory), recent_size)
     indices = self.rng.integers(low=0, high=recent_size, size=(batch_size,))
-    return [self.memory[i] for i in indices]
+    return collect_batch([self.memory[i] for i in indices])
 
   def __len__(self):
     return len(self.memory)
 
-
-def collect_batch(batch_list: List, device: torch.device) -> Dict[str, torch.Tensor]:
+def collect_batch(batch_list: List, device: torch.device = 'cuda') -> Dict[str, torch.Tensor]:
   """Collects a batch of data from a list of transitions.
 
   Args:
@@ -74,9 +72,27 @@ def collect_batch(batch_list: List, device: torch.device) -> Dict[str, torch.Ten
   Returns:
       Dict[str, torch.Tensor]: a batch of data.
   """
-  pass
+  list_len = len(batch_list)
+  key_to_list = {}
+  for key in batch_list[0].keys():
+    key_to_list[key] = [batch_list[i][key] for i in range(list_len)]
+    
+  input_batch = {}
+  for key, value in key_to_list.items():
+    if type(value[0]) == dict:
+      input_batch[key] = collect_batch(value, device)
+    elif type(value[0]) == torch.Tensor:
+      input_batch[key] = merge_batch_by_padding_2nd_dim(value).to(device)
+    elif type(value[0]) == np.ndarray:
+      input_batch[key] = torch.from_numpy(np.stack(value, axis=0)).to(device)
+    elif type(value[0]) == list:
+      # stack list of lists
+      input_batch[key] = [item for sublist in value for item in sublist]
+    else:
+      input_batch[key] = value
+  return input_batch
   
-def to_device(obj: Union[Dict, torch.Tensor], device: torch.device, detach = True) -> Union[Dict, torch.Tensor]:
+def to_device(obj: Union[Dict, torch.Tensor, np.ndarray], device: torch.device, detach = True) -> Union[Dict, torch.Tensor]:
   """Moves a dict or a tensor to a device.
 
   Args:
@@ -93,6 +109,27 @@ def to_device(obj: Union[Dict, torch.Tensor], device: torch.device, detach = Tru
       return obj.detach().to(device)
     else:
       return obj.to(device)
+  elif type(obj) == np.ndarray:
+    return torch.from_numpy(obj.copy()).to(device)
   else:
     return obj
-  
+
+
+def merge_batch_by_padding_2nd_dim(tensor_list):
+  if len(tensor_list[0].shape) > 1:
+    maxt_feat0 = max([x.shape[1] for x in tensor_list])
+    
+    rest_size = tensor_list[0].shape[2:]
+    
+    ret_tensor_list = []
+    for k in range(len(tensor_list)):
+      cur_tensor = tensor_list[k]
+      assert cur_tensor.shape[2:] == rest_size
+
+      new_tensor = cur_tensor.new_zeros(cur_tensor.shape[0], maxt_feat0, *rest_size)
+      new_tensor[:, :cur_tensor.shape[1], ...] = cur_tensor
+      ret_tensor_list.append(new_tensor)
+  else:
+    ret_tensor_list = tensor_list
+      
+  return torch.cat(ret_tensor_list, dim=0).contiguous()  

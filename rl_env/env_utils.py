@@ -15,41 +15,62 @@ from rl_env.env_utils import *
 
 from typing import Dict, Tuple
 
-def womd_loader(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
-    # Write a custom dataloader that loads scenario IDs.
-    def _preprocess(serialized: bytes) -> dict[str, tf.Tensor]:
-        womd_features = dataloader.womd_utils.get_features_description(
-            include_sdc_paths=data_config.include_sdc_paths,
-            max_num_rg_points=data_config.max_num_rg_points,
-            num_paths=data_config.num_paths,
-            num_points_per_path=data_config.num_points_per_path,
-        )
-        womd_features['scenario/id'] = tf.io.FixedLenFeature([1], tf.string)
-
-        deserialized = tf.io.parse_example(serialized, womd_features)
-        parsed_id = deserialized.pop('scenario/id')
-        deserialized['scenario/id'] = tf.io.decode_raw(parsed_id, tf.uint8)
-        # print(deserialized['scenario/id'].tobytes())
-        return dataloader.preprocess_womd_example(
-            deserialized,
-            aggregate_timesteps=data_config.aggregate_timesteps,
-            max_num_objects=data_config.max_num_objects,
-        )
+class WomdLoader:
+    def __init__(self, data_config: waymax_config.DatasetConfig) -> None:
+        self.data_config = data_config
+        self.length = None
+        self.reset()
         
-    def _postprocess(example: dict[str, tf.Tensor]):
-        scenario = dataloader.simulator_state_from_womd_dict(example)
-        scenario_id = example['scenario/id']
-        return scenario_id, scenario
+    def reset(self):
+        self.iter = self.create_iter(self.data_config)
     
-    def decode_bytes(data_iter):
-        with tf.device('/cpu:0'):
-            for scenario_id, scenario in data_iter:
-                scenario_id = scenario_id.tobytes().decode('utf-8')
-                yield scenario_id, scenario
-    # Force use CPU
-    return decode_bytes(dataloader.get_data_generator(
-            data_config, _preprocess, _postprocess
-        ))
+    def next(self):
+        return next(self.iter)
+    
+    def len(self):
+        if self.length is None:
+            self.length = sum(1 for _ in self.iter)
+        else:
+            return self.length
+    
+    
+    
+    @staticmethod
+    def create_iter(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
+        # Write a custom dataloader that loads scenario IDs.
+        def _preprocess(serialized: bytes) -> dict[str, tf.Tensor]:
+            womd_features = dataloader.womd_utils.get_features_description(
+                include_sdc_paths=data_config.include_sdc_paths,
+                max_num_rg_points=data_config.max_num_rg_points,
+                num_paths=data_config.num_paths,
+                num_points_per_path=data_config.num_points_per_path,
+            )
+            womd_features['scenario/id'] = tf.io.FixedLenFeature([1], tf.string)
+
+            deserialized = tf.io.parse_example(serialized, womd_features)
+            parsed_id = deserialized.pop('scenario/id')
+            deserialized['scenario/id'] = tf.io.decode_raw(parsed_id, tf.uint8)
+            # print(deserialized['scenario/id'].tobytes())
+            return dataloader.preprocess_womd_example(
+                deserialized,
+                aggregate_timesteps=data_config.aggregate_timesteps,
+                max_num_objects=data_config.max_num_objects,
+            )
+            
+        def _postprocess(example: dict[str, tf.Tensor]):
+            scenario = dataloader.simulator_state_from_womd_dict(example)
+            scenario_id = example['scenario/id']
+            return scenario_id, scenario
+        
+        def decode_bytes(data_iter):
+            with tf.device('/cpu:0'):
+                for scenario_id, scenario in data_iter:
+                    scenario_id = scenario_id.tobytes().decode('utf-8')
+                    yield scenario_id, scenario
+        # Force use CPU
+        return decode_bytes(dataloader.get_data_generator(
+                data_config, _preprocess, _postprocess
+            ))
         
 def action_to_waymax_action(sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
     """Converts a action [dx, dy, dyaw] to an waymax action."""

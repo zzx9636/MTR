@@ -17,7 +17,7 @@ class Actor(nn.Module):
   def __init__(self, 
     cfg,
     actor_network: nn.Module,
-    device: torch.device = torch.device('cuda')
+    device: torch.device = 'cuda'
   ) -> None:
     nn.Module.__init__(self)
     
@@ -34,6 +34,7 @@ class Actor(nn.Module):
       [cfg.LOG_ALPHA_INIT],
       dtype=torch.float32,
       requires_grad=True,
+      device=device
     )
     
     self.target_entropy = torch.tensor(
@@ -94,8 +95,7 @@ class Actor(nn.Module):
         self.alpha_optimizer_scheduler.step()
 
   def update(self, 
-        q1: torch.Tensor,
-        q2: torch.Tensor,
+        q: torch.Tensor,
         log_prob: torch.Tensor,
       ) -> Tuple[float, float, float]:
     """
@@ -112,9 +112,9 @@ class Actor(nn.Module):
     """
     # Update Actor
     if self.actor_type == 'min':
-      q_pi = torch.max(q1, q2)
+      q_pi = torch.max(q, dim=-1)[0]
     elif self.actor_type == 'max':
-      q_pi = torch.min(q1, q2)
+      q_pi = torch.min(q, dim=-1)[0]
       
     if self.entropy_reg:
       loss_entropy = self.alpha * log_prob.view(-1).mean()
@@ -134,18 +134,15 @@ class Actor(nn.Module):
 
     # Update Alpha
     if self.entropy_reg and self.update_alpha:
-      loss_alpha = (self.alpha * (-log_prob.detach() - self.target_entropy)).mean()
+      loss_alpha = (self.alpha * (-log_prob.detach() - self.target_entropy))
       self.alpha_optimizer.zero_grad()
-      loss_alpha.backward()
+      loss_alpha.mean().backward()
       self.alpha_optimizer.step()
       #TODO: Do we need to clip alpha?
       # self.log_alpha.data = torch.min(self.log_alpha.data, self.init_alpha.data)
 
-    return {
-      'loss_q_eval': loss_q_eval.item(),
-      'loss_entropy': loss_entropy.item(),
-      'loss_alpha': loss_alpha.item()
-    }
+    return q_pi.sum().item(), log_prob.sum().item(), loss_alpha.sum().item()
+
 
   def forward(self, encoder_dict: Dict) -> Dict:
     """

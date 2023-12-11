@@ -19,66 +19,62 @@ from queue import PriorityQueue
 import wandb
 import time
 from rl_env.waymax_env import MultiAgentEnvironment
-from rl_env.env_utils import action_to_waymax_action
+from rl_env.env_utils import action_to_waymax_action, WomdLoader
 
 from rl.encoder import Encoder
 from rl.actor import Actor
 from rl.critic import Critic
+from tqdm.auto import tqdm
 
 from rl.rl_utils import ReplayMemory, collect_batch, to_device
 
 class SAC():
   def __init__(
     self,
-    cfg_solver,
+    cfg,
     seed,
-    data_iter: iter, 
+    train_data_iter: WomdLoader, 
+    val_data_iter: WomdLoader,
     env: MultiAgentEnvironment,
     encoder: Encoder,  
     actor: Actor,
     ref_actor: Actor,
     critic: Critic,
   ):
-    '''
-    ############################# Load config
-    self.cfg_solver = copy.deepcopy(cfg_solver)    
     
-    self.device = torch.device(cfg_solver.device)
+    ############################# Load config
+    
     # Training hyper-parameters.
-    self.num_envs = int(cfg_solver.num_envs)
-    self.max_steps = int(self.cfg_solver.max_steps)  # Maximum number of steps for training.
-    self.opt_period = int(self.cfg_solver.opt_period)  # Optimizes actors/critics every `opt_period` steps.
-    self.num_updates_per_opt = int(self.cfg_solver.num_updates_per_opt)  # The number of updates per optimization.
-    self.eval_period = int(self.cfg_solver.eval_period)  # Evaluates actors/critics every `eval_period` steps.
-    self.actor_update_period = int(self.cfg_solver.actor_update_period)  # Updates actor every `actor_update_period` steps.
-    self.soft_update_period = int(self.cfg_solver.soft_update_period)  # Updates critic target every `soft_update_period` steps.
-    self.soft_tau = float(self.cfg_solver.soft_tau)  # Soft update coefficient for the target network.
-    self.warmup_steps = int(self.cfg_solver.warmup_steps)  # Uses random actions before `warmup_steps`.
-    self.min_steps_b4_opt = int(self.cfg_solver.min_steps_b4_opt)  # Starts to optimize after `min_steps_b4_opt`.
-    self.batch_size = int(cfg_solver.batch_size)
-    self.max_model = int(cfg_solver.max_model) if cfg_solver.max_model is not None else None
+    self.max_steps = int(cfg.MAX_STEPS)  # Maximum number of steps for training.
+    self.opt_period = int(cfg.OPT_PERIOD)  # Optimizes actors/critics every `opt_period` steps.
+    self.num_updates_per_opt = int(cfg.NUM_UPDATES)  # The number of updates per optimization.
+    self.eval_period = int(cfg.EVAL_PERIOD)  # Evaluates actors/critics every `eval_period` steps.
+    self.actor_update_period = int(cfg.ACTOR_UPDATE_PERIOD)  # Updates actor every `actor_update_period` steps.
+    self.soft_update_period = int(cfg.SOFT_UPDATE_PERIOD)  # Updates critic target every `soft_update_period` steps.
+    self.soft_tau = float(cfg.SOFT_UPDATE_TAU)  # Soft update coefficient for the target network.
+    self.min_steps_b4_opt = int(cfg.MIN_STEP_BEFORE_TRAIN)  # Starts to optimize after `min_steps_b4_opt`.
+    self.batch_size = int(cfg.BATCH_SIZE)
     
     # Evaluation
-    self.eval_b4_learn = bool(cfg_solver.eval.b4_learn)
-    self.eval_metric: str = cfg_solver.eval.metric
 
     ########################## Replay Buffer.
-    self.memory = ReplayMemory(int(cfg_solver.memory_capacity), seed)
+    self.memory = ReplayMemory(int(cfg.MEMORY_SIZE), seed)
     self.rng = np.random.default_rng(seed=seed)
 
     ######################### Logs checkpoints and visualizations.
-    self.out_folder: str = self.cfg_solver.out_folder
+    self.out_folder: str = cfg.OUT_DIR
     self.model_folder = os.path.join(self.out_folder, 'model')
     os.makedirs(self.model_folder, exist_ok=True)
     self.figure_folder = os.path.join(self.out_folder, 'figure')
     os.makedirs(self.figure_folder, exist_ok=True)
-    self.use_wandb = bool(cfg_solver.use_wandb)
+    self.use_wandb = bool(cfg.USE_WANDB)
     if self.use_wandb:
       # initialize wandb
         wandb.init(entity='zzx9636', project='SAC')
-    '''
+    
     # Environment
-    self.data_iter = data_iter
+    self.train_data_iter = train_data_iter
+    self.val_data_iter = val_data_iter
     self.env = env
 
     # Actor and Critic
@@ -98,9 +94,12 @@ class SAC():
     start_learning = time.time()
     obsrv_all = None
     
-    self.eval() 
+    self.eval()
     
-    while self.cnt_step <= self.max_steps:
+
+    for i in tqdm(range(self.max_steps)):
+      self.cnt_step = i
+      self.cnt_opt_period += 1
       # Interacts with the env and sample transitions.
       obsrv_all = self.interact(obsrv_all)
 
@@ -123,20 +122,23 @@ class SAC():
     Returns:
       The next observation after taking a step in the environment.
     """
+    self.encoder.eval()
+    self.actor.eval()
+    
     if obs_cur is None:
       # sample a new episode
-      scenario_id, cur_state = next(self.data_iter)
+      scenario_id, scenario = self.train_data_iter.next()
+      cur_state = self.env.reset(scenario)
       with torch.no_grad():
-        self.encoder.eval()
         cur_encoded_state, is_controlled = self.encoder(cur_state, None)
+      scenario_id = [scenario_id] * is_controlled.sum().item()
+      
     else:
       scenario_id = obs_cur['scenario_id']
       cur_state = obs_cur['cur_state']
       cur_encoded_state = obs_cur['cur_encoded_state']
       is_controlled = obs_cur['is_controlled']
-      
-    
-    self.actor.eval()
+          
     with torch.no_grad():      
       # 1. Run a forward pass of the decoder to get action
       decoder_ouput = self.actor(cur_encoded_state)
@@ -173,36 +175,37 @@ class SAC():
       has_infeasible_kinematics = np.any(rewards['kinematics'] <= 0)
     
     g_x = np.minimum(rewards['overlap'], rewards['offroad'])
-    g_x = np.minimum(g_x, rewards['kinematics'])
+    # g_x = np.minimum(g_x, rewards['kinematics'])
       
     # 6. Get the next observation  
-    next_encoded_state, is_controlled = self.encoder(next_state, is_controlled)
-    # print(has_collision, has_offroad, has_infeasible_kinematics, next_state.remaining_timesteps.item() <= 0)
+    with torch.no_grad():
+      next_encoded_state, is_controlled = self.encoder(next_state, is_controlled)
+
     # 7. Check if the episode is done
     is_done = has_collision or has_offroad or has_infeasible_kinematics or next_state.remaining_timesteps.item() <= 0 
     n_agent = cur_action.shape[0]
     is_done_array = torch.ones(n_agent, dtype=torch.bool) * is_done
-    
     # 8. create record
     record = {
-      'scenario_id': to_device(scenario_id, 'cpu', detach=True),
+      'scenario_id': scenario_id,
       'cur_encoded_state': to_device(cur_encoded_state, 'cpu', detach=True),
       'cur_action': to_device(cur_action, 'cpu', detach=True),
       'rewards': to_device(rewards, 'cpu', detach=True), # Dict
       'g_x': to_device(g_x, 'cpu', detach=True), # (num_agent,)
       'next_encoded_state': to_device(next_encoded_state, 'cpu', detach=True), # Dict
       'is_done': to_device(is_done_array, 'cpu', detach=True), # (num_agent,)
-      'is_controlled': to_device(is_controlled, 'cpu', detach=True)
+      # 'is_controlled': to_device(is_controlled, 'cpu', detach=True)
     }
     
     # 9. save the record to the memory
-    # self.memory.update(record)
+    self.memory.update(record)
     
     # 10. return the next observation
     if is_done:
       obs_next = None
     else:
       obs_next = {
+        'scenario_id': scenario_id,
         'cur_state': next_state,
         'cur_encoded_state': next_encoded_state,
         'is_controlled': is_controlled,
@@ -210,7 +213,6 @@ class SAC():
     
     return obs_next
     
-  
   def update_actor(self, record: Dict):
     """
     Update the actor network based on the given record.
@@ -227,17 +229,17 @@ class SAC():
         
     # update the model mode
     self.actor.train()
-    self.ref_actor.eval()
+    # self.ref_actor.eval()
     self.critic.eval()
     
     # 1. Run a forward pass of the decoder to get action
     decoder_ouput = self.actor(cur_encoded_state)
     
     # 2. Run a forward pass of the reference actor to get reference action distribution
-    with torch.no_grad():
-      ref_decoder_output = self.ref_actor(cur_encoded_state)
+    # with torch.no_grad():
+    #   ref_decoder_output = self.ref_actor(cur_encoded_state)
     
-    ref_mode, ref_mix, ref_gmm = self.ref_actor.construct_distribution(ref_decoder_output)
+    # ref_mode, ref_mix, ref_gmm = self.ref_actor.construct_distribution(ref_decoder_output)
     
     # 3. TODO: Compute the KL divergence
     
@@ -249,10 +251,10 @@ class SAC():
     batch_size = sampled_action.shape[0]
     
     # 5. Compute the Q value
-    q1, q2 = self.critic(cur_encoded_state, sampled_action)
+    q = self.critic(cur_encoded_state, sampled_action)
     
     # 4. update the actor
-    loss_pi, loss_ent, loss_alpha = self.actor.update(q1=q1, q2=q2, log_prob=log_prob)
+    loss_pi, loss_ent, loss_alpha = self.actor.update(q=q, log_prob=log_prob)
     
     return loss_pi, loss_ent, loss_alpha, batch_size
     
@@ -284,16 +286,16 @@ class SAC():
       
       assert batch_size == next_action.shape[0]
       
-    # 3. Compute the target Q value
-    q1_next, q2_next = self.critic_target(next_encoded_state, next_action)
+      # 3. Compute the target Q value
+      q_next = self.critic_target(next_encoded_state, next_action)
     
     # 4. Compute the estimated Q value
-    q1, q2 = self.critic(cur_encoded_state, cur_action)  # Gets Q(s, a).
+    q = self.critic(cur_encoded_state, cur_action)  # Gets Q(s, a).
 
     # 5. Update the critic
     loss_q = self.critic.update(
-      q1=q1, q2=q2,
-      q1_next=q1_next, q2_next=q2_next,
+      q = q,
+      q_next=q_next,
       done = done, reward=None,
       g_x=g_x, l_x=None,
       binary_cost=None,
@@ -315,17 +317,7 @@ class SAC():
       actor_count = 0
       
       for timer in range(self.num_updates_per_opt):
-        sample = True
-        cnt = 0
-        while sample:
-          batch = self.sample_batch()
-          sample = torch.logical_not(torch.any(batch.non_final_mask))
-          cnt += 1
-          if cnt >= 10:
-            break
-        if sample:
-          warnings.warn("Cannot get a valid batch!!", UserWarning)
-          continue
+        batch = self.memory.sample(self.batch_size)
         
         loss_q, batch_size = self.update_critics(batch)
         critic_count += batch_size
@@ -343,27 +335,115 @@ class SAC():
         # do soft update of the critic target network
         if timer % self.soft_update_period == 0:
           self.critic_target.soft_update(self.critic, self.soft_tau)
-          
+        
       loss_q_mean = np.sum(loss_q_all)/critic_count
       loss_pi_mean = np.sum(loss_pi_all)/actor_count
       loss_ent_mean = np.sum(loss_ent_all)/actor_count
       loss_alpha_mean = np.sum(loss_alpha_all)/actor_count
-
-      if self.use_wandb:
-        log_dict = {
+      
+      log_dict = {
             "loss/critic": loss_q_mean,
             "loss/policy": loss_pi_mean,
             "loss/entropy": loss_ent_mean,
             "loss/alpha": loss_alpha_mean,
             # "metrics/cnt_safety_violation": self.cnt_safety_violation,
             # "metrics/cnt_num_episode": self.cnt_num_episode,
-            "hyper_parameters/alpha": self.actor.alpha,
+            "hyper_parameters/alpha": self.actor.alpha.item(),
             "hyper_parameters/gamma": self.critic.gamma,
         }
+      if self.use_wandb:
         wandb.log(log_dict, step=self.cnt_step, commit=False)
-
+      else:
+        print(log_dict)
+ 
   def eval(self):
-    pass
+    print('Evaluating the model at sample step {}'.format(self.cnt_step))
+    self.val_data_iter.reset()
+    
+    eposide_length = []
+    count_success = 0
+    count_collision = 0
+    count_offroad = 0
+    
+    self.encoder.eval()
+    self.actor.eval()
+    num_val = self.val_data_iter.len()
+    for i, (_, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=num_val):
+      if i >= 100:
+        break
+      cur_state = self.env.reset(scenario)
+      cur_encoded_state, is_controlled = self.encoder(cur_state, None)
+      while True:
+        with torch.no_grad():      
+          
+          # 1. Run a forward pass of the decoder to get action
+          decoder_ouput = self.actor(cur_encoded_state)
+          # 2. Sample Action  
+          cur_action = self.actor.sample(decoder_ouput)['sample'].detach().cpu().numpy()
+          
+        # 3. Convert to action
+        waymax_action = action_to_waymax_action(cur_action, is_controlled)
+        
+        # 4. Step the waymax environment
+        next_state = self.env.step_sim_agent(cur_state, [waymax_action])
+        
+        # 5. Run metrics Function
+        metrics = self.env.metrics(next_state, waymax_action)
+        
+        has_collision = False
+        if 'overlap' in metrics.keys():
+          #(num_agent,) # Min Distance to other agents
+          overlap = np.asarray(metrics['overlap'].value[is_controlled].min(axis = -1))
+          has_collision = np.any(overlap <= 0)
+          
+        has_offroad = False
+        if 'offroad' in metrics.keys():
+          # (num_agent,) # Distance to off-road area, off-road when negative
+          offroad = np.asanyarray(-metrics['offroad'].value[is_controlled]) 
+          has_offroad = np.any(offroad <= 0)
+          
+        has_infeasible_kinematics = False
+        if 'kinematics' in metrics.keys():
+          # (num_agent,) # Kinematics infeasibility when value is negative
+          kinematics = np.asarray(-metrics['kinematics'].value[is_controlled]) 
+          has_infeasible_kinematics = np.any(kinematics <= 0)
+        
+        done = False
+        if has_collision:
+          count_collision += 1
+          done = True
+        
+        if has_offroad:
+          count_offroad += 1
+          done = True
+        
+        # if has_infeasible_kinematics:
+        #   break
+        
+        if next_state.remaining_timesteps.item() <= 0:
+          count_success += 1
+          done = True
+          
+        if done:
+          eposide_length.append(next_state.timestep.item())
+          break
+        else:
+          with torch.no_grad():
+            cur_encoded_state, is_controlled = self.encoder(next_state, is_controlled)
+            cur_state = next_state
+
+    eval_result = {
+      'avg_eposide_length': np.mean(eposide_length) - self.env.config.init_steps, 
+      'success': count_success,
+      'collision': count_collision,
+      'offroad': count_offroad,
+    }
+    
+    if self.use_wandb:
+      wandb.log(eval_result, step=self.cnt_step, commit=False)
+    else:
+      print(eval_result)
+    
   
   
 

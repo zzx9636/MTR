@@ -204,8 +204,6 @@ class MTREncoder(nn.Module):
         
         if retain_input:
             output_dict.update(batch_dict)
-        else:
-            del batch_dict
             
         return output_dict
 
