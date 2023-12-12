@@ -83,7 +83,7 @@ class BCDecoder(nn.Module):
             
         
         # Prediction Head
-        output_dim = 10
+        output_dim = 6
             
         self.prediction_layers = nn.ModuleList([ResidualMLP(
                 c_in = self.d_model,
@@ -92,34 +92,29 @@ class BCDecoder(nn.Module):
                 without_norm = True       
             ) for _ in range(self.num_decoder_layers+1)])
         
-        self.register_buffer('output_mean', torch.tensor([7.26195561e-01, 1.52434988e-03, 7.25015970e-04]))
-        self.register_buffer('output_std', torch.tensor([0.54773382, 0.02357974, 0.04607823]))
-        
-        self.forward_ret_dict = {}
-    
+        self.register_buffer('output_mean', torch.tensor([0.0, 0.0]))
+        self.register_buffer('output_std', torch.tensor([10.0, 0.3]))
+            
     def build_mode_distribution(self, pred_ctrl, log_std_range=(-5.0, 2.0), rho_limit=0.4):
-        independent = pred_ctrl.shape[-1] == 6
+        independent = pred_ctrl.shape[-1] == 5
     
-        mean = pred_ctrl[..., 0:3] # (num_center_objects, num_query, 3)
+        mean = pred_ctrl[..., 0:2] # (num_center_objects, num_query, 2)
                 
-        log_std = torch.clip(pred_ctrl[..., 3:6], min=log_std_range[0], max=log_std_range[1])
+        log_std = torch.clip(pred_ctrl[..., 2:4], min=log_std_range[0], max=log_std_range[1])
         std = torch.exp(log_std)
         
         std1 = std[..., 0]
         std2 = std[..., 1]
-        std3 = std[..., 2]
+
         if independent:
-            rho1 = rho2 = rho3 = torch.zeros_like(std1)
+            rho = torch.zeros_like(std1)
         else:
-            rho1 = torch.clip(pred_ctrl[..., 6], min=-rho_limit, max=rho_limit) # 1&2
-            rho2 = torch.clip(pred_ctrl[..., 7], min=-rho_limit, max=rho_limit) # 1&3
-            rho3 = torch.clip(pred_ctrl[..., 8], min=-rho_limit, max=rho_limit) # 2&3 
+            rho = torch.clip(pred_ctrl[..., 4], min=-rho_limit, max=rho_limit) # 1&2
             
         covariance = torch.stack([
-            torch.stack([std1**2, rho1*std1*std2, rho2*std1*std3], dim=-1),
-            torch.stack([rho1*std1*std2, std2**2, rho3*std2*std3], dim=-1),
-            torch.stack([rho2*std1*std3, rho3*std2*std3, std3**2], dim=-1),
-        ], dim=-1) # (num_center_objects, num_query, 3, 3)
+            torch.stack([std1**2, rho*std1*std2], dim=-1),
+            torch.stack([rho*std1*std2, std2**2], dim=-1),
+        ], dim=-1) # (num_center_objects, num_query, 2, 2)
         mode = MultivariateNormal(mean, covariance_matrix=covariance)
       
         return mode
@@ -130,21 +125,21 @@ class BCDecoder(nn.Module):
         gmm = MixtureSameFamily(mix, mode)
         return mode, mix, gmm
     
-    def get_loss(self, tb_pre_tag=''):
+    def get_loss(self, decoder_dict, tb_pre_tag=''):
         if self.loss_mode == 'best':
-            return self.get_loss_best(tb_pre_tag)
+            return self.get_loss_best(decoder_dict, tb_pre_tag)
         else:
-            return self.get_loss_gmm(tb_pre_tag)
+            return self.get_loss_gmm(decoder_dict, tb_pre_tag)
 
-    def get_loss_best(self, tb_pre_tag='', filter = True):
+    def get_loss_best(self, decoder_dict, tb_pre_tag='', filter = True):
         tb_dict = {}
         
-        center_gt = self.forward_ret_dict['center_gt'][...,None,:3].cuda()
+        center_gt = decoder_dict['gt_action'][...,None,:].cuda()
         # normalize the gt
         center_gt = (center_gt - self.output_mean) / self.output_std
         
         total_loss = 0 
-        for i, (pred_states, pred_scores) in enumerate(self.forward_ret_dict['pred_list']):               
+        for i, (pred_states, pred_scores) in enumerate(decoder_dict['pred_list']):               
             # Get mode for all
             # print(pred_states.shape)
             mode_all = self.build_mode_distribution(pred_states) # [batch size]
@@ -174,21 +169,21 @@ class BCDecoder(nn.Module):
             total_loss += layer_loss
         
         # Average over layers    
-        total_loss /= len(self.forward_ret_dict['pred_list'])
+        total_loss /= len(decoder_dict['pred_list'])
         
         tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
             
         return total_loss, tb_dict
     
-    def get_loss_gmm(self, tb_pre_tag=''):
+    def get_loss_gmm(self, decoder_dict, tb_pre_tag=''):
         tb_dict = {}
         
-        center_gt = self.forward_ret_dict['center_gt'][...,:3].cuda()
+        center_gt = decoder_dict['gt_action'].cuda()
         # normalize the gt
         center_gt = (center_gt - self.output_mean) / self.output_std
         
-        pred_ctrls = self.forward_ret_dict['pred_ctrls']
-        pred_scores = self.forward_ret_dict['pred_scores']
+        pred_ctrls = decoder_dict['pred_ctrls']
+        pred_scores = decoder_dict['pred_scores']
         
         # Get mode for all
         _, _, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores) # [batch size]
@@ -306,14 +301,7 @@ class BCDecoder(nn.Module):
             pred_scores = prediction[..., -1].permute(1, 0).contiguous()
             
             pred_list.append((pred_states, pred_scores))
-            
-        if 'input_dict' in batch_dict:
-            input_dict = batch_dict['input_dict']
-            if 'center_gt' in input_dict:
-                self.forward_ret_dict['pred_list'] = pred_list
-                self.forward_ret_dict['center_gt'] = input_dict['center_gt']
-                # Otherwise, it is in the inference mode
-            
+                
         batch_dict['pred_list'] = pred_list
         return batch_dict
     

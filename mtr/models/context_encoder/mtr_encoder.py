@@ -150,13 +150,14 @@ class MTREncoder(nn.Module):
             batch_dict:
               input_dict:
         """
-        input_dict = batch_dict['input_dict']
-        obj_trajs, obj_trajs_mask = input_dict['obj_trajs'].cuda(), input_dict['obj_trajs_mask'].cuda() 
-        map_polylines, map_polylines_mask = input_dict['map_polylines'].cuda(), input_dict['map_polylines_mask'].cuda() 
+        # input_dict = batch_dict['input_dict']
+        input_dict = batch_dict
+        obj_trajs, obj_trajs_mask = input_dict['obj_trajs'].float().cuda(), input_dict['obj_trajs_mask'].bool().cuda() 
+        map_polylines, map_polylines_mask = input_dict['map_polylines'].float().cuda(), input_dict['map_polylines_mask'].bool().cuda() 
 
-        obj_trajs_last_pos = input_dict['obj_trajs_last_pos'].cuda() 
-        map_polylines_center = input_dict['map_polylines_center'].cuda() 
-        track_index_to_predict = input_dict['track_index_to_predict'].cuda()
+        obj_trajs_last_pos = input_dict['obj_trajs_last_pos'].float().cuda() 
+        map_polylines_center = input_dict['map_polylines_center'].float().cuda() 
+        track_index_to_predict = input_dict['track_index_to_predict'].int().cuda()
 
         assert obj_trajs_mask.dtype == torch.bool and map_polylines_mask.dtype == torch.bool
 
@@ -203,7 +204,8 @@ class MTREncoder(nn.Module):
         output_dict['map_pos'] = map_polylines_center
         
         if retain_input:
-            output_dict.update(batch_dict)
+            # output_dict.update(batch_dict)
+            output_dict['gt_action'] = input_dict['gt_action']
             
         return output_dict
 

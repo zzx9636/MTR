@@ -22,8 +22,8 @@ MODEL:
     MOTION_DECODER:
         NAME: BCDecoder
 
-        OBJECT_TYPE: *object_type 
-        CENTER_OFFSET_OF_MAP: *center_offset
+        # OBJECT_TYPE: *object_type 
+        # CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_MOTION_MODES: 6
 
@@ -42,8 +42,8 @@ MODEL:
     Q_DECODER:
         NAME: Qecoder
 
-        OBJECT_TYPE: *object_type 
-        CENTER_OFFSET_OF_MAP: *center_offset
+        # OBJECT_TYPE: *object_type 
+        # CENTER_OFFSET_OF_MAP: *center_offset
 
         NUM_Q_MODES: 2
 
@@ -106,4 +106,4 @@ SAC:
         SOFT_UPDATE_TAU: 0.005
         MEMORY_SIZE: 10_000
         OUT_DIR: 'output/rl_finetune'
-        USE_WANDB: True
+        USE_WANDB: False

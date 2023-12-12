@@ -59,6 +59,12 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             encoded_state, is_controlled = self.encoding_state(state)
             output = self.forward_decoder(encoded_state)
         
+        pred_ctrls, pred_scores = output['pred_list'][-1]
+        
+        # _, _, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
+        # sample_action = gmm.sample().detach().cpu()
+        # actions_sampled = sample_action * self.motion_decoder.output_std.cpu() + self.motion_decoder.output_mean.cpu()
+        # actions_sampled = actions_sampled.numpy()
         actions_sampled = self.sample(output)['sample'].detach().cpu().numpy()
         
         return self.sample_to_action(actions_sampled, is_controlled)

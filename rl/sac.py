@@ -11,11 +11,12 @@
 
 from typing import Optional, Union, Tuple, Dict
 import os
-import warnings
 import torch
 import copy
 import numpy as np
-from queue import PriorityQueue
+from waymax import visualization
+from waymax import config as waymax_config
+import matplotlib.pyplot as plt
 import wandb
 import time
 from rl_env.waymax_env import MultiAgentEnvironment
@@ -75,6 +76,8 @@ class SAC():
     # Environment
     self.train_data_iter = train_data_iter
     self.val_data_iter = val_data_iter
+    print("get length of val data iter, takes a while")
+    self.val_data_iter.len()
     self.env = env
 
     # Actor and Critic
@@ -357,6 +360,8 @@ class SAC():
         print(log_dict)
  
   def eval(self):
+    if self.cnt_step % self.eval_period != 0:
+      return
     print('Evaluating the model at sample step {}'.format(self.cnt_step))
     self.val_data_iter.reset()
     
@@ -368,7 +373,11 @@ class SAC():
     self.encoder.eval()
     self.actor.eval()
     num_val = self.val_data_iter.len()
-    for i, (_, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=num_val):
+    
+    cur_figure_folder = os.path.join(self.figure_folder, f"step_{self.cnt_step}")
+    os.makedirs(cur_figure_folder, exist_ok=True)
+    
+    for i, (scenario_id, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=num_val):
       if i >= 100:
         break
       cur_state = self.env.reset(scenario)
@@ -426,6 +435,17 @@ class SAC():
           
         if done:
           eposide_length.append(next_state.timestep.item())
+          # visualize 
+          img = visualization.plot_simulator_state(
+            next_state, use_log_traj=False, 
+            highlight_obj = waymax_config.ObjectType.MODELED
+          )
+          plt.imshow(img)
+          plt.axis('off')
+          plt.title(f"Scenario {scenario_id}, Step {next_state.timestep.item()}, Offroad {has_offroad}, Collision {has_collision}")
+          plt.savefig(os.path.join(cur_figure_folder, f"scenario_{scenario_id}.png"), 
+                    bbox_inches='tight', pad_inches=0, dpi=300)
+          plt.close()
           break
         else:
           with torch.no_grad():

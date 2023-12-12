@@ -19,18 +19,18 @@ class BCDecoder(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
         self.model_cfg = config
-        self.object_type = self.model_cfg.OBJECT_TYPE
-        self.num_future_frames = self.model_cfg.NUM_FUTURE_FRAMES
         self.num_motion_modes = self.model_cfg.NUM_MOTION_MODES
         self.d_model = self.model_cfg.D_MODEL
         self.n_head = self.model_cfg.NUM_ATTN_HEAD
         self.dropout = self.model_cfg.get('DROPOUT_OF_ATTN', 0.1)
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
         self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
-        self.use_bicycle_model = self.model_cfg.get('USE_BICYCLE_MODEL', False)
         
         # Build the query
-        self.query = nn.Parameter(torch.randn(self.num_motion_modes, self.d_model), requires_grad=True)
+        self.query = nn.Parameter(
+            torch.randn(self.num_motion_modes, self.d_model),
+            requires_grad=True
+        )
         
         # Project the input to a higher dimension
         self.in_proj_center_obj = nn.Sequential(
@@ -83,10 +83,7 @@ class BCDecoder(nn.Module):
             
         
         # Prediction Head
-        if self.use_bicycle_model:
-            output_dim = 9
-        else:
-            output_dim = 10
+        output_dim = 10
             
         self.prediction_layers = nn.ModuleList([ResidualMLP(
                 c_in = self.d_model,
@@ -209,16 +206,17 @@ class BCDecoder(nn.Module):
         return total_loss, tb_dict
     
     def forward(self, batch_dict):
-        input_dict = batch_dict['input_dict']
-        
         # Aggregate features over the history 
-        obj_feature, obj_mask, obj_pos = batch_dict['obj_feature'], batch_dict['obj_mask'], batch_dict['obj_pos']
-        map_feature, map_mask, map_pos = batch_dict['map_feature'], batch_dict['map_mask'], batch_dict['map_pos']
-        center_objects_feature = batch_dict['center_objects_feature']
-        track_index_to_predict = batch_dict['track_index_to_predict']
-
+        obj_feature, obj_mask, obj_pos = batch_dict['obj_feature'].cuda(), batch_dict['obj_mask'].cuda(), batch_dict['obj_pos'].cuda()
+        map_feature, map_mask, map_pos = batch_dict['map_feature'].cuda(), batch_dict['map_mask'].cuda(), batch_dict['map_pos'].cuda()
+        track_index_to_predict = batch_dict['track_index_to_predict'].cuda()
+        
         num_center_objects, num_objects, _ = obj_feature.shape
-
+        
+        center_objects_feature = obj_feature[torch.arange(num_center_objects), track_index_to_predict]
+        
+        # center_objects_feature = batch_dict['center_objects_feature']
+    
         num_polylines = map_feature.shape[1]
         
         # Remove Ego agent from the object feature
@@ -262,13 +260,6 @@ class BCDecoder(nn.Module):
         prediction = self.prediction_layers[0](query_embed)
         pred_scores = prediction[..., -1].permute(1, 0).contiguous()
         pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
-        
-        if self.use_bicycle_model:
-            pred_ctrls = pred_states[..., :2] # (num_center_objects, num_motion_modes, 2)
-            pred_ctrls_sigma = pred_states[..., 2:] # (num_center_objects, num_motion_modes, 6)
-            pred_states = self.bicycle_forward(input_dict, pred_ctrls)
-            pred_states = (pred_states - self.output_mean) / self.output_std # normalize the output
-            pred_states = torch.cat([pred_states, pred_ctrls_sigma], dim=-1) # (num_center_objects, num_motion_modes, 9)
         
         pred_list = [(pred_states, pred_scores)]
         
@@ -314,49 +305,32 @@ class BCDecoder(nn.Module):
             pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
             pred_scores = prediction[..., -1].permute(1, 0).contiguous()
             
-            if self.use_bicycle_model:
-                pred_ctrls = pred_states[..., :2] # (num_center_objects, num_motion_modes, 2)
-                pred_ctrls_sigma = pred_states[..., 2:] # (num_center_objects, num_motion_modes, 6)
-                pred_states = self.bicycle_forward(input_dict, pred_ctrls)
-                pred_states = (pred_states - self.output_mean) / self.output_std # normalize the output
-                pred_states = torch.cat([pred_states, pred_ctrls_sigma], dim=-1) # (num_center_objects, num_motion_modes, 9)
-            
             pred_list.append((pred_states, pred_scores))
             
-        if 'center_gt' in input_dict:
-            self.forward_ret_dict['pred_list'] = pred_list
-            self.forward_ret_dict['center_gt'] = input_dict['center_gt']
-            # Otherwise, it is in the inference mode
+        if 'input_dict' in batch_dict:
+            input_dict = batch_dict['input_dict']
+            if 'center_gt' in input_dict:
+                self.forward_ret_dict['pred_list'] = pred_list
+                self.forward_ret_dict['center_gt'] = input_dict['center_gt']
+                # Otherwise, it is in the inference mode
             
         batch_dict['pred_list'] = pred_list
         return batch_dict
     
-    def bicycle_forward(self, input_dict, pred_ctrls, dt = 0.1, step = 5):
+    def load_model(
+        self,
+        state_dict: dict
+    ):
         
-        num_center, num_modes, _ = pred_ctrls.shape
+        model_keys = self.state_dict().keys()
         
-        full_traj = input_dict['obj_trajs'].cuda()
-        center_idx = input_dict['track_index_to_predict']
-        center_traj = full_traj[torch.arange(num_center), center_idx, -1]
-        
-        
-        # initialize the state
-        Length = 5 #center_traj[..., 3, None]
-        v = center_traj[..., -4:-2].norm(dim=-1, keepdim=True)
-        x = torch.zeros_like(v, device=v.device)
-        y = torch.zeros_like(v, device=v.device)
-        theta = torch.zeros_like(v, device=v.device)
-        
-        a = pred_ctrls[..., 0] * 10 # max acceleration is 10 m/s^2
-        delta = pred_ctrls[..., 1] * 0.35 # max steering angle is 0.35 rad        
-        beta = torch.arctan(0.5*torch.tan(delta))        
-        ddt = dt / step
-        for _ in range(step):
-            # print(v.shape, delta.shape, Length.shape)
-            theta = theta + v * torch.sin(delta) * ddt / (Length/2)
-            x = x + v * torch.cos(theta+beta) * ddt
-            y = y + v * torch.sin(theta+beta) * ddt
-            v = v + a * ddt
-            
-        return torch.stack([x, y, theta], dim=-1)
-        
+        state_dict_filtered = {}
+        # search for the weights in the state_dict_to_load and save to a new dict
+        for key in model_keys:
+            for state_key in state_dict.keys():
+                if state_key.endswith(key):
+                    state_dict_filtered[key] = state_dict[state_key]
+                    break
+                
+        # load the filtered state_dict
+        self.load_state_dict(state_dict_filtered, strict=True)
