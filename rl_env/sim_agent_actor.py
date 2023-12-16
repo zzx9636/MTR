@@ -4,7 +4,8 @@ import jax.numpy as jnp
 from waymax import agents, datatypes
 from waymax.agents import actor_core
 
-from rl_env.env_utils import *
+from rl_env.env_utils import merge_dict
+from rl_env.env_utils import process_input
 
 import numpy as np
 import os
@@ -60,12 +61,15 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             output = self.forward_decoder(encoded_state)
         
         pred_ctrls, pred_scores = output['pred_list'][-1]
+        _, _, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
+        sample_action = gmm.sample().detach().cpu()
+        sample_action = torch.clamp(sample_action, -1, 1)
+        actions_sampled = sample_action * self.motion_decoder.output_std.cpu() + self.motion_decoder.output_mean.cpu()
+        actions_sampled = actions_sampled.numpy()
+        # print(actions_sampled)
         
-        # _, _, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
-        # sample_action = gmm.sample().detach().cpu()
-        # actions_sampled = sample_action * self.motion_decoder.output_std.cpu() + self.motion_decoder.output_mean.cpu()
-        # actions_sampled = actions_sampled.numpy()
-        actions_sampled = self.sample(output)['sample'].detach().cpu().numpy()
+        
+        # actions_sampled = self.sample(output)['sample'].detach().cpu().numpy()
         
         return self.sample_to_action(actions_sampled, is_controlled)
     
@@ -76,7 +80,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         state.object_metadata.is_modeled = is_controlled
         state.object_metadata.is_controlled = is_controlled
         input_dict = process_input(state, is_controlled)
-        input_dict_batch = encoder_collate_batch([input_dict])
+        input_dict_batch = merge_dict([input_dict])
         
         encoded_state = self.forward_encoder(input_dict_batch)
         
@@ -84,7 +88,8 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         
     def sample_to_action(self, sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
         """Converts a sample to an waymax action."""
-        actions_array = np.zeros((is_controlled.shape[0], 3))
+        
+        actions_array = np.zeros((is_controlled.shape[0], sample.shape[-1]))
         actions_array[is_controlled] = sample
         actions_valid = jnp.asarray(is_controlled[...,None])
         
@@ -201,11 +206,12 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         cur_decoder = self.motion_decoder
         
         pred_ctrls, pred_scores = output_dict['pred_list'][-1]
+        # print(pred_ctrls[...,:2])
         
         best_idx = torch.argmax(pred_scores, dim=-1)
         
         # take value from the best index
-        sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :3]
+        sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :2]
         
         sample = sample * cur_decoder.output_std + cur_decoder.output_mean
         

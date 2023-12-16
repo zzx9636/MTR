@@ -1,10 +1,89 @@
-import numpy as np
-import torch
-from waymax import datatypes
 
 import numpy as np
+import torch
+from mtr.utils import common_utils
+from waymax import datatypes
+from waymax.agents import actor_core
+from waymax import dataloader
+from waymax import config as waymax_config
+import tensorflow as tf
+tf.config.experimental.set_visible_devices([], "GPU")
+import numpy as np
 import jax
-from typing import Dict, List
+from jax import numpy as jnp
+# from rl_env.env_utils import *
+from typing import Dict, Tuple, List
+from torch.utils.data import IterableDataset
+from waymax.dynamics import bicycle_model
+    
+def create_iter(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, datatypes.SimulatorState]):
+    # Write a custom dataloader that loads scenario IDs.
+    def _preprocess(serialized: bytes) -> dict[str, tf.Tensor]:
+        womd_features = dataloader.womd_utils.get_features_description(
+            include_sdc_paths=data_config.include_sdc_paths,
+            max_num_rg_points=data_config.max_num_rg_points,
+            num_paths=data_config.num_paths,
+            num_points_per_path=data_config.num_points_per_path,
+        )
+        womd_features['scenario/id'] = tf.io.FixedLenFeature([1], tf.string)
+
+        deserialized = tf.io.parse_example(serialized, womd_features)
+        parsed_id = deserialized.pop('scenario/id')
+        deserialized['scenario/id'] = tf.io.decode_raw(parsed_id, tf.uint8)
+        return dataloader.preprocess_womd_example(
+            deserialized,
+            aggregate_timesteps=data_config.aggregate_timesteps,
+            max_num_objects=data_config.max_num_objects,
+        )
+        
+    def _postprocess(example: dict[str, tf.Tensor]):
+        scenario = dataloader.simulator_state_from_womd_dict(example)
+        scenario_id = example['scenario/id']
+        return scenario_id, scenario
+    
+    def decode_bytes(data_iter):
+        # Force use CPU
+        # with tf.device('/cpu:0'):
+        for scenario_id, scenario in data_iter:
+            scenario_id = scenario_id.tobytes().decode('utf-8')
+            yield scenario_id, scenario
+                
+    return decode_bytes(dataloader.get_data_generator(
+            data_config, _preprocess, _postprocess
+        ))
+        
+class WomdLoader:
+    def __init__(self, data_config: waymax_config.DatasetConfig) -> None:
+        self.data_config = data_config
+        self.length = None
+        self.reset()
+        
+    def reset(self):
+        self.iter = create_iter(self.data_config)
+    
+    def next(self):
+        return next(self.iter)
+    
+    def len(self):
+        if self.length is None:
+            self.length = sum(1 for _ in self.iter)
+            self.reset()
+        else:
+            return self.length
+    
+def action_to_waymax_action(sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
+    """Converts a action [dx, dy, dyaw] to an waymax action."""
+    actions_array = np.zeros((is_controlled.shape[0], 3))
+    actions_array[is_controlled] = sample
+    actions_valid = jnp.asarray(is_controlled[...,None])
+    
+    actions = datatypes.Action(data=jnp.asarray(actions_array), valid=actions_valid)
+    
+    return actor_core.WaymaxActorOutput(
+        action=actions,
+        actor_state=None,
+        is_controlled=is_controlled,
+    )
     
 def merge_dict(batch_list: List, device: torch.device = 'cpu') -> Dict[str, torch.Tensor]:
     """Collects a batch of data from a list of transitions.
@@ -58,16 +137,19 @@ def process_input(
     """
     # Extract Objects Meta Data
     obj_metadata: datatypes.ObjectMetadata = scenario.object_metadata
-    obj_types = np.asarray(obj_metadata.object_types)
+    obj_ids = obj_metadata.ids
+    obj_types = _convert_obj_type(obj_metadata)
     sdc_track_index = np.where(obj_metadata.is_sdc)[0][0] # only one sdc
     track_index_to_predict = np.where(is_controlled)[0]
     
-
+    
+    
     if from_gt:
         trajectory: datatypes.Trajectory = scenario.log_trajectory
         assert current_time_index is not None, "current_time_index must be provided when using ground truth"
     else:
         current_time_index = scenario.timestep
+        # print(track_index_to_predict)
         # Extract Objects Trajectory
         trajectory: datatypes.Trajectory = scenario.sim_trajectory # TODO: check if this is the right trajectory
     
@@ -80,13 +162,16 @@ def process_input(
     start_index = max(0, end_index - history_length)
     obj_trajs_past = obj_trajs[:, start_index:end_index, :]
     center_objects = obj_trajs_past[track_index_to_predict, -1]
+    center_objects_id = obj_ids[track_index_to_predict]
+    center_objects_type = obj_types[track_index_to_predict]
     
     if obj_trajs_past.shape[1] < history_length:
         # pad with zeros
         obj_trajs_past = np.pad(obj_trajs_past, ((0, 0), (history_length - obj_trajs_past.shape[1], 0), (0, 0))) 
     
     # create agent centric trajectory
-    (obj_trajs_data, obj_trajs_mask, obj_trajs_last_pos) \
+    (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos,
+        track_index_to_predict_new, obj_types, obj_ids) \
     = create_agent_data_for_center_objects(
         center_objects=center_objects,
         obj_trajs_past=obj_trajs_past, 
@@ -94,29 +179,38 @@ def process_input(
         sdc_track_index=sdc_track_index,
         timestamps=timestamps,
         obj_types=obj_types,
+        obj_ids=obj_ids
     )
     
     # Remove non seeing history
     # print(obj_trajs_data.shape, len(track_index_to_predict))
-    # obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history, :] = 0.0
-    # obj_trajs_mask[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history] = False
+    obj_trajs_data[np.arange(len(track_index_to_predict_new)), track_index_to_predict_new, :-visible_history, :] = 0.0
+    obj_trajs_mask[np.arange(len(track_index_to_predict_new)), track_index_to_predict_new, :-visible_history] = False
         
     polylines = _stack_map(scenario.roadgraph_points)
-    
     # Extract the map information
     # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
     # (num_center_objects, num_topk_polylines, num_points_each_polyline)
     map_polylines_data, map_polylines_mask, map_polylines_center = create_map_data_for_center_objects(
             center_objects=center_objects, 
             polylines=polylines,
-            # center_offset=(0, 0), # !Hardcoded
+            center_offset=(0, 0), # !Hardcoded
         )   
     
     ret_dict = {
+        # 'scenario_id': np.array([self.scene_id] * len(track_index_to_predict_new)),
         'obj_trajs': obj_trajs_data,
         'obj_trajs_mask': obj_trajs_mask,
-        'track_index_to_predict': track_index_to_predict,  # used to select center-features
+        'track_index_to_predict': track_index_to_predict_new,  # used to select center-features
+        # 'obj_trajs_pos': obj_trajs_pos,
         'obj_trajs_last_pos': obj_trajs_last_pos,
+        # 'obj_types': obj_types.tolist(),
+        # 'obj_ids': obj_ids,
+
+        # 'center_objects_world': center_objects,
+        # 'center_objects_id': center_objects_id,
+        # 'center_objects_type': center_objects_type,
+        
         'map_polylines': map_polylines_data,
         'map_polylines_mask': map_polylines_mask,
         'map_polylines_center': map_polylines_center,
@@ -153,6 +247,16 @@ def _stack_map(map_data: datatypes.RoadgraphPoints) -> np.ndarray:
         # map_data.ids,
         # map_data.valid,
     ], axis=-1) # [num_tracks, num_steps, 9]
+
+def _convert_obj_type(obj_metadata: datatypes.ObjectMetadata)->np.ndarray:
+    """Converts object type from int to string"""
+    
+    str_map = ['TYPE_UNSET', 'TYPE_VEHICLE', 'TYPE_PEDESTRIAN', 'TYPE_CYCLIST', 'TYPE_OTHER']
+    
+    obj_types_int = obj_metadata.object_types
+    obj_types_str = np.array([str_map[i] for i in obj_types_int])
+    
+    return obj_types_str
     
 def create_agent_data_for_center_objects(
         center_objects,
@@ -160,7 +264,8 @@ def create_agent_data_for_center_objects(
         track_index_to_predict,
         sdc_track_index,
         timestamps,
-        obj_types,    
+        obj_types,
+        obj_ids,
     ):
     obj_trajs_data, obj_trajs_mask = generate_centered_trajs_for_agents(
         center_objects=center_objects, 
@@ -170,6 +275,18 @@ def create_agent_data_for_center_objects(
         sdc_index=sdc_track_index,
         timestamps=timestamps, 
     )
+
+    # filter invalid past trajs
+    # assert obj_trajs_past.__len__() == obj_trajs_data.shape[1]
+    valid_past_mask = np.logical_not(obj_trajs_past[:, :, -1].sum(axis=-1) == 0)  # (num_objects (original))
+    obj_trajs_mask = obj_trajs_mask[:, valid_past_mask]  # (num_center_objects, num_objects (filtered), num_timestamps)
+    obj_trajs_data = obj_trajs_data[:, valid_past_mask]  # (num_center_objects, num_objects (filtered), num_timestamps, C)
+    obj_types = obj_types[valid_past_mask]
+    obj_ids = obj_ids[valid_past_mask]
+
+    valid_index_cnt = valid_past_mask.cumsum(axis=0)
+    track_index_to_predict_new = valid_index_cnt[track_index_to_predict] - 1
+    # sdc_track_index_new = valid_index_cnt[sdc_track_index] - 1  # TODO: CHECK THIS
 
     # generate the final valid position of each object
     obj_trajs_pos = obj_trajs_data[:, :, :, 0:3]
@@ -182,7 +299,12 @@ def create_agent_data_for_center_objects(
     return (
         obj_trajs_data,
         obj_trajs_mask > 0,
+        obj_trajs_pos,
         obj_trajs_last_pos,
+        track_index_to_predict_new,
+        # sdc_track_index_new,
+        obj_types,
+        obj_ids
     )
 
 def generate_centered_trajs_for_agents(
@@ -208,8 +330,8 @@ def generate_centered_trajs_for_agents(
         ret_obj_trajs (num_center_objects, num_objects, num_timestamps, num_attrs):
         ret_obj_valid_mask (num_center_objects, num_objects, num_timestamps):
     """
-    # assert obj_trajs_past.shape[-1] == 10
-    # assert center_objects.shape[-1] == 10
+    assert obj_trajs_past.shape[-1] == 10
+    assert center_objects.shape[-1] == 10
     num_center_objects = center_objects.shape[0]
     num_objects, num_timestamps, _ = obj_trajs_past.shape
     
@@ -224,9 +346,9 @@ def generate_centered_trajs_for_agents(
 
     ## generate the attributes for each object
     object_onehot_mask = np.zeros((num_center_objects, num_objects, num_timestamps, 5))
-    object_onehot_mask[:, obj_types == 1, :, 0] = 1
-    object_onehot_mask[:, obj_types == 2, :, 1] = 1  # TODO: CHECK THIS TYPO
-    object_onehot_mask[:, obj_types == 3, :, 2] = 1
+    object_onehot_mask[:, obj_types == 'TYPE_VEHICLE', :, 0] = 1
+    object_onehot_mask[:, obj_types == 'TYPE_PEDESTRAIN', :, 1] = 1  # TODO: CHECK THIS TYPO
+    object_onehot_mask[:, obj_types == 'TYPE_CYCLIST', :, 2] = 1
     object_onehot_mask[np.arange(num_center_objects), center_indices, :, 3] = 1
     if sdc_index is not None:
         object_onehot_mask[:, sdc_index, :, 4] = 1
@@ -250,7 +372,7 @@ def generate_centered_trajs_for_agents(
         object_time_embedding, 
         object_heading_embedding,
         obj_trajs[:, :, :, 7:9], 
-        acce,
+        acce*0,  #! Hardcoded No acceleration
     ), axis=-1)
 
     ret_obj_valid_mask = obj_trajs[:, :, :, -1]  # (num_center_obejcts, num_objects, num_timestamps)  
@@ -373,9 +495,16 @@ def generate_batch_polylines_from_map(
     ret_polylines = np.stack(ret_polylines, axis=0)
     ret_polylines_mask = np.stack(ret_polylines_mask, axis=0)
 
+    ret_polylines = torch.from_numpy(ret_polylines)
+    ret_polylines_mask = torch.from_numpy(ret_polylines_mask)
+
+    # # CHECK the results
+    # polyline_center = ret_polylines[:, :, 0:2].sum(dim=1) / ret_polyline_valid_mask.sum(dim=1).float()[:, None]  # (num_polylines, 2)
+    # center_dist = (polyline_center - ret_polylines[:, 0, 0:2]).norm(dim=-1)
+    # assert center_dist.max() < 10
     return ret_polylines, ret_polylines_mask
 
-def create_map_data_for_center_objects(center_objects, polylines):
+def create_map_data_for_center_objects(center_objects, polylines, center_offset):
     """
     Args:
         center_objects (num_center_objects, 10): [cx, cy, cz, dx, dy, dz, heading, vel_x, vel_y, valid]
@@ -392,61 +521,64 @@ def create_map_data_for_center_objects(center_objects, polylines):
     def transform_to_center_coordinates(neighboring_polylines, neighboring_polyline_valid_mask):
         neighboring_polylines[:, :, :, 0:3] -= center_objects[:, None, None, 0:3]
         neighboring_polylines[:, :, :, 0:2] = rotate_points_along_z(
-            points=neighboring_polylines[:, :, :, 0:2].reshape((num_center_objects, -1, 2)),
+            points=neighboring_polylines[:, :, :, 0:2].view(num_center_objects, -1, 2),
             angle=-center_objects[:, 6]
-        ).reshape((num_center_objects, -1, batch_polylines.shape[1], 2))
+        ).view(num_center_objects, -1, batch_polylines.shape[1], 2)
         neighboring_polylines[:, :, :, 3:5] = rotate_points_along_z(
-            points=neighboring_polylines[:, :, :, 3:5].reshape((num_center_objects, -1, 2)),
+            points=neighboring_polylines[:, :, :, 3:5].view(num_center_objects, -1, 2),
             angle=-center_objects[:, 6]
-        ).reshape((num_center_objects, -1, batch_polylines.shape[1], 2))
-        
+        ).view(num_center_objects, -1, batch_polylines.shape[1], 2)
+
         # use pre points to map
         # (num_center_objects, num_polylines, num_points_each_polyline, num_feat)
         xy_pos_pre = neighboring_polylines[:, :, :, 0:2]
-        xy_pos_pre = np.roll(xy_pos_pre, shift=1, axis=-2)
+        xy_pos_pre = torch.roll(xy_pos_pre, shifts=1, dims=-2)
         xy_pos_pre[:, :, 0, :] = xy_pos_pre[:, :, 1, :]
-        neighboring_polylines = np.concatenate([neighboring_polylines, xy_pos_pre], axis=-1)
+        neighboring_polylines = torch.cat((neighboring_polylines, xy_pos_pre), dim=-1)
+
         neighboring_polylines[neighboring_polyline_valid_mask == 0] = 0
         return neighboring_polylines, neighboring_polyline_valid_mask
 
-    # (num_polylines, num_points_each_polyline, 7), (num_polylines, num_points_each_polyline)
+    polylines = torch.from_numpy(polylines.copy())
+    center_objects = torch.from_numpy(center_objects)
+
     batch_polylines, batch_polylines_mask = generate_batch_polylines_from_map(
-        polylines=polylines,
-    )  
+        polylines=polylines.numpy(),
+    )  # (num_polylines, num_points_each_polyline, 7), (num_polylines, num_points_each_polyline)
 
     # collect a number of closest polylines for each center objects
     num_of_src_polylines = 768
-    
-    def get_polyline_center(map_polylines, map_polylines_mask):
-        '''
-        map_polylines: (..., num_points_each_polyline, 9)
-        map_polylines_mask: (..., num_points_each_polyline)
-        
-        return: (..., 3)
-        '''
-        temp_sum = (map_polylines[..., 0:3] * map_polylines_mask[..., None]).sum(axis=-2) 
-        map_polylines_center = temp_sum / np.clip(map_polylines_mask.sum(axis=-1)[..., None], a_min=1.0, a_max=None) 
-        return map_polylines_center
 
     if len(batch_polylines) > num_of_src_polylines:
-        polyline_center = get_polyline_center(batch_polylines, batch_polylines_mask)
-        pos_of_map_centers = center_objects[:, 0:2]  # (num_center_objects, 2)
-        dist = np.linalg.norm(pos_of_map_centers[:, None, :] - polyline_center[None, :, :2], axis=-1)  # (num_center_objects, num_polylines)
-        topk_idxs = np.argsort(dist, axis=-1)[:, :num_of_src_polylines]  # (num_center_objects, num_topk_polylines)
+        polyline_center = batch_polylines[:, :, 0:2].sum(dim=1) / torch.clamp_min(batch_polylines_mask.sum(dim=1).float()[:, None], min=1.0)
+        center_offset_rot = torch.from_numpy(np.array(center_offset, dtype=np.float32))[None, :].repeat(num_center_objects, 1)
+        center_offset_rot = rotate_points_along_z(
+            points=center_offset_rot.view(num_center_objects, 1, 2),
+            angle=center_objects[:, 6]
+        ).view(num_center_objects, 2)
+
+        pos_of_map_centers = center_objects[:, 0:2] + center_offset_rot
+
+        dist = (pos_of_map_centers[:, None, :] - polyline_center[None, :, :]).norm(dim=-1)  # (num_center_objects, num_polylines)
+        topk_dist, topk_idxs = dist.topk(k=num_of_src_polylines, dim=-1, largest=False)
         map_polylines = batch_polylines[topk_idxs]  # (num_center_objects, num_topk_polylines, num_points_each_polyline, 7)
         map_polylines_mask = batch_polylines_mask[topk_idxs]  # (num_center_objects, num_topk_polylines, num_points_each_polyline)
     else:
-        map_polylines = np.repeat(batch_polylines[None, ...], num_center_objects, axis=0)
-        map_polylines_mask = np.repeat(batch_polylines_mask[None, ...], num_center_objects, axis=0)
+        map_polylines = batch_polylines[None, :, :, :].repeat(num_center_objects, 1, 1, 1)
+        map_polylines_mask = batch_polylines_mask[None, :, :].repeat(num_center_objects, 1, 1)
 
     map_polylines, map_polylines_mask = transform_to_center_coordinates(
         neighboring_polylines=map_polylines,
         neighboring_polyline_valid_mask=map_polylines_mask
     )
- 
-    # (num_center_objects, num_polylines, 3)
-    map_polylines_center = get_polyline_center(map_polylines, map_polylines_mask)
-    
+
+    temp_sum = (map_polylines[:, :, :, 0:3] * map_polylines_mask[:, :, :, None].float()).sum(dim=-2)  # (num_center_objects, num_polylines, 3)
+    map_polylines_center = temp_sum / torch.clamp_min(map_polylines_mask.sum(dim=-1).float()[:, :, None], min=1.0)  # (num_center_objects, num_polylines, 3)
+
+    map_polylines = map_polylines.numpy()
+    map_polylines_mask = map_polylines_mask.numpy()
+    map_polylines_center = map_polylines_center.numpy()
+
     return map_polylines, map_polylines_mask, map_polylines_center
 
 def merge_batch_by_padding_2nd_dim(tensor_list):

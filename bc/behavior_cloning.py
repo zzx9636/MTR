@@ -1,19 +1,9 @@
-from typing import Any
-
 import torch
 import torch.optim.lr_scheduler as lr_sched
-from torch.utils.data import DataLoader
-
-from mtr.datasets.waymo.waymo_dataset_bc import WaymoDatasetBC as WaymoDataset
-from mtr.config import cfg, cfg_from_yaml_file
-
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-from lightning.pytorch.loggers import WandbLogger
 
 from mtr.models.context_encoder.mtr_encoder import MTREncoder
 from mtr.models.motion_decoder.bc_decoder import BCDecoder
-
 
 from easydict import EasyDict
 
@@ -50,8 +40,11 @@ class BehaviorCloning(pl.LightningModule):
         param2opt = self.decoder.parameters()
         if not self.freeze_encoder:
             param2opt.extend(self.encoder.parameters())
-                 
-
+        else:
+            # make all parameters in encoder not trainable
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            
         optimizer = torch.optim.AdamW(
             param2opt, 
             lr=self.opt_cfg.LR,
@@ -72,9 +65,7 @@ class BehaviorCloning(pl.LightningModule):
         encoder_output = self.encoder(batch, retain_input=True)
         decoder_output = self.decoder(encoder_output)
         loss, tb_dict = self.decoder.get_loss(decoder_output, 'train/')
-         
-        log_dict = {f'train/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True)
+        self.log_dict(tb_dict, on_step=True, prog_bar=True, logger=True)
         
         return loss
     
@@ -82,6 +73,4 @@ class BehaviorCloning(pl.LightningModule):
         encoder_output = self.encoder(batch, retain_input=True)
         decoder_output = self.decoder(encoder_output)
         _, tb_dict = self.decoder.get_loss(decoder_output, 'val/')
-         
-        log_dict = {f'train/{k}': v for k, v in tb_dict.items()}
-        self.log_dict(log_dict, on_step=True, prog_bar=True, logger=True)
+        self.log_dict(tb_dict, on_step=True, prog_bar=True, logger=True)

@@ -15,10 +15,12 @@ from bc.bc_dataset import BCDatasetBuffer
 
     
 # main function
-def train(cfg_file, 
-        pretrained_encoder: dict = None, 
-        freeze_pretrained: bool = True
-    ):
+def train(
+    cfg_file, 
+    pretrained_encoder: dict = None, 
+    freeze_pretrained: bool = True
+):
+    torch.set_float32_matmul_precision('high')
 
     # Load the config
     cfg_from_yaml_file(cfg_file, cfg)
@@ -43,7 +45,7 @@ def train(cfg_file,
             data_format=waymax_config.DataFormat.TFRECORD,
             max_num_objects=32,
         ),
-        buffer_size=500,
+        buffer_size=1000,
     )
     
     train_loader = DataLoader(
@@ -80,15 +82,16 @@ def train(cfg_file,
         accelerator="gpu",
         enable_progress_bar=True, 
         logger=logger, 
-        detect_anomaly=True,
+        detect_anomaly=False,
         gradient_clip_val=0.5, 
         gradient_clip_algorithm="value",
         callbacks=[
             ModelCheckpoint(
                 dirpath = f'output/bc_ctrl_{num_decoder}_{freeze_str}',
                 save_top_k=10,
+                save_weights_only = True,
                 monitor='val/loss_total', 
-                every_n_train_steps = cfg.OPTIMIZATION.VAL_CHECK_INTERVAL,
+                every_n_epochs = 1,
                 save_on_train_epoch_end=False,
             ),
             LearningRateMonitor(logging_interval='step')

@@ -20,7 +20,7 @@ from typing import Dict, Tuple, Union, List
 
 from waymax.env import typedefs as types
 
-from rl_env.env_utils import *
+from rl_env.env_utils import process_input, merge_dict
 from rl_env.rewards.ReachAvoidMetrics import ReachAvoidMetrics
 from tools.mtr_lightning import MTR_Lightning
 import tensorflow as tf

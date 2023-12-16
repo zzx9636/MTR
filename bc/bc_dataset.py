@@ -1,84 +1,93 @@
 import torch
-from torch.utils.data import Dataset, IterableDataset
+from torch.utils.data import IterableDataset
 import pickle
-import glob
 import os
-from rl_env.env_utils import merge_dict
-from rl_env.env_utils import process_input, create_iter
-from collections import deque 
+from rl_env.env_utils import merge_dict, process_input
 from waymax import datatypes
-from waymax.dynamics import bicycle_model
-
 import numpy as np
-from jax import numpy as jnp
+from typing import List
 
-class BCDataset(Dataset):
-    def __init__(self, data_path):
+class BCDataset(IterableDataset):
+    def __init__(
+        self,
+        data_path: str,
+        sample_method: str = 'uniform'
+    ):
         # Get all files in the directory
-        self.files = glob.glob(os.path.join(data_path, '*.pkl'))
+        self.data_path = data_path
+        
+        # load cache file
+        cache_file = os.path.join(data_path, 'cache.pkl')
+        with open(cache_file, 'rb') as f:
+            self.cache = pickle.load(f)
+        self.scenario_id_list = self.cache['scenario_id_list']
+        self.accel_grid = self.cache['accel_grid']
+        self.steer_grid = self.cache['steer_grid']
+        
+        # create_histogram
+        self.histogram = []
+        self.idx_cache = {}
+        for i, idx_list in enumerate(self.cache['idx_cache'].values()):
+            self.histogram.append(len(idx_list))
+            self.idx_cache[i] = idx_list
+        self.histogram = np.asarray(self.histogram)
+        
+        if sample_method == 'uniform':
+            self.sample_p = self.histogram > 0
+        elif sample_method == 'log':
+            self.sample_p = np.log(self.histogram+1)
+        else:
+            self.sample_p = self.histogram
+        # normalize
+        self.sample_p = self.sample_p / self.sample_p.sum()
+            
+    def retrive_one(self, cache: List):
+        """
+        Retrieves a single example from the dataset based on the given cache.
 
-    def __len__(self):
-        return len(self.files)
+        Args:
+            cache (List): A list containing the indices used to retrieve the example.
 
-    def __getitem__(self, idx):
-        with open(self.files[idx], 'rb') as f:
-            data = pickle.load(f)
-        return data
-    
+        Returns:
+            dict: A dictionary containing the retrieved example and additional information.
+        """
+        scenario_idx = cache[0]
+        scenario_id = self.scenario_id_list[scenario_idx]
+        t_idx = cache[1]
+        a_idx = cache[2]
+        
+        scenario_filename = os.path.join(self.data_path, 'scenario_'+scenario_id+'.pkl')
+        
+        # load scenario
+        with open(scenario_filename, 'rb') as f:
+            scenario_dict = pickle.load(f)
+        scenario: datatypes.SimulatorState = scenario_dict['scenario']
+        full_action_gt: np.ndarray = scenario_dict['action_gt'] #(T, A, 2)
+                
+        is_controlled = np.zeros(32, dtype=bool)
+        is_controlled[a_idx] = True 
+        input_dict = process_input(
+            scenario=scenario,
+            is_controlled=is_controlled,
+            from_gt=True,
+            current_time_index=t_idx,
+        )
+        
+        input_dict['gt_action'] = full_action_gt[t_idx, a_idx:a_idx+1, :]
+        input_dict['scenario_id'] = [scenario_id]
+        input_dict['t'] = [t_idx]
+        
+        return input_dict
+        
     def collate_fn(self, batch_list):
         input_dict = merge_dict(batch_list)
         return input_dict
-        
-class BCDatasetBuffer(IterableDataset):
-    def __init__(self, data_config, buffer_size=1000):
-        self.data_config = data_config
-        self.data_iter = create_iter(data_config)
-        self.buffer_size = buffer_size
-        self.out_buffer = []
-        self.in_buffer = deque(maxlen=None)
-        
-    def extract_data(self):
-        # Get GT action by inverse kinematics
-        scenario_id, scenario = next(self.data_iter)
-        for cur_t in range(90):
-            action = bicycle_model.compute_inverse(scenario.log_trajectory, cur_t)
-            valid_agent = jnp.logical_and(action.valid.reshape(-1), scenario.object_metadata.object_types)
-            gt_action = np.asarray(action.data)
-            if not valid_agent.any():
-                return None
-
-            input_dict = process_input(
-                scenario=scenario,
-                is_controlled=valid_agent,
-                from_gt=True,
-                current_time_index=cur_t,
-            )
-            
-            # Split data to each agent
-            for i, idx in enumerate(jnp.where(valid_agent)[0]):
-                cur_input_dict = {k: v[i:i+1] for k, v in input_dict.items()}
-                cur_input_dict['gt_action'] = gt_action[idx:idx+1]
-                cur_input_dict['scenario_id'] = [scenario_id]
-                cur_input_dict['t'] = [cur_t]
-                
-                self.in_buffer.append(cur_input_dict)
     
-    def get_from_in_buffer(self):
-        if len(self.in_buffer) == 0:
-            self.extract_data()
-        return self.in_buffer.popleft()
-        
     def __iter__(self):
         while True:
-            while len(self.out_buffer) < self.buffer_size:
-                self.out_buffer.append(self.get_from_in_buffer())
-                
-            idx = np.random.randint(self.buffer_size)
-            item = self.out_buffer[idx]
-            yield item
-            self.out_buffer[idx] = self.get_from_in_buffer()
-                
-    def collate_fn(self, batch_list):
-        input_dict = merge_dict(batch_list)
-        return input_dict
-        
+            bin_idx = np.random.choice(len(self.sample_p), p=self.sample_p)
+            cache_id = np.random.randint(self.histogram[bin_idx])
+            cache = self.idx_cache[bin_idx][cache_id]
+            input_dict = self.retrive_one(cache)
+            yield input_dict
+

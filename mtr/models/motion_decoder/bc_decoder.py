@@ -115,8 +115,8 @@ class BCDecoder(nn.Module):
             torch.stack([std1**2, rho*std1*std2], dim=-1),
             torch.stack([rho*std1*std2, std2**2], dim=-1),
         ], dim=-1) # (num_center_objects, num_query, 2, 2)
+        
         mode = MultivariateNormal(mean, covariance_matrix=covariance)
-      
         return mode
     
     def build_gmm_distribution(self, pred_ctrl, pred_ctrl_score, log_std_range=(-5.0, 2.0), rho_limit=0.4):
@@ -134,12 +134,20 @@ class BCDecoder(nn.Module):
     def get_loss_best(self, decoder_dict, tb_pre_tag='', filter = True):
         tb_dict = {}
         
-        center_gt = decoder_dict['gt_action'][...,None,:].cuda()
+        center_gt_unnormalized = decoder_dict['gt_action'][...,None,:].cuda()
         # normalize the gt
-        center_gt = (center_gt - self.output_mean) / self.output_std
+        center_gt = (center_gt_unnormalized - self.output_mean) / self.output_std
         
         total_loss = 0 
         for i, (pred_states, pred_scores) in enumerate(decoder_dict['pred_list']):               
+            # if torch.isnan(pred_states).any():
+            #     print("NAN in pred_states", i)
+            #     print(torch.where(torch.isnan(pred_states)))
+            #     raise Exception
+            # if torch.isnan(pred_scores).any():
+            #     print("NAN in pred_scores", i)
+            #     print(torch.where(torch.isnan(pred_scores)))
+            #     raise Exception
             # Get mode for all
             # print(pred_states.shape)
             mode_all = self.build_mode_distribution(pred_states) # [batch size]
@@ -148,11 +156,11 @@ class BCDecoder(nn.Module):
             
             # Filter out the noise prediction
             if filter:
-                nll_loss_valid = nll_loss_best < 20
+                nll_loss_valid = (torch.abs(center_gt.squeeze(1)) < 1.5).all(dim=1) # filter out gt with large value
                 nll_loss_best = nll_loss_best[nll_loss_valid]
                 best_idx = best_idx[nll_loss_valid]
                 pred_scores = pred_scores[nll_loss_valid]
-                tb_dict[f'{tb_pre_tag}layer{i}_num_invalid'] = torch.sum(~nll_loss_valid).float().item()
+                # tb_dict[f'{tb_pre_tag}layer{i}_num_invalid'] = torch.sum(~nll_loss_valid).float().item()
 
             cls_loss = F.cross_entropy(input  = pred_scores, target= best_idx, reduction='none')
 
@@ -160,10 +168,11 @@ class BCDecoder(nn.Module):
             tb_dict[f'{tb_pre_tag}layer{i}_loss_nll'] = nll_loss_best.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss_cls'] = cls_loss.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss'] = layer_loss.item()
+            tb_dict[f'{tb_pre_tag}layer{i}_log_std_mean'] = pred_states[:,2:4].mean().item()
             
-            tb_dict[f'{tb_pre_tag}layer{i}_pred_mean'] = pred_states.mean().item()
-            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_states.std(dim=1).mean().item()
-            tb_dict[f'{tb_pre_tag}layer{i}_score_mean'] = pred_scores.mean().item()
+            # tb_dict[f'{tb_pre_tag}layer{i}_pred_mean'] = pred_states.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_states[:, :2].std(dim=1).mean().item()
+            # tb_dict[f'{tb_pre_tag}layer{i}_score_mean'] = pred_scores.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_score_std'] = pred_scores.std(dim=1).mean().item()
             
             total_loss += layer_loss
@@ -175,29 +184,36 @@ class BCDecoder(nn.Module):
             
         return total_loss, tb_dict
     
-    def get_loss_gmm(self, decoder_dict, tb_pre_tag=''):
+    def get_loss_gmm(self, decoder_dict, tb_pre_tag='', filter = True):
         tb_dict = {}
         
-        center_gt = decoder_dict['gt_action'].cuda()
+        center_gt_unnormalized = decoder_dict['gt_action'].cuda()
         # normalize the gt
-        center_gt = (center_gt - self.output_mean) / self.output_std
-        
-        pred_ctrls = decoder_dict['pred_ctrls']
-        pred_scores = decoder_dict['pred_scores']
-        
-        # Get mode for all
-        _, _, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores) # [batch size]
-        nll_loss = -gmm.log_prob(center_gt)
+        center_gt = (center_gt_unnormalized - self.output_mean) / self.output_std
 
-        total_loss = nll_loss.mean()
-        tb_dict[f'{tb_pre_tag}loss_nll'] = nll_loss.mean().item()
+        total_loss = 0 
+        for i, (pred_ctrls, pred_scores) in enumerate(decoder_dict['pred_list']):    
+            # Get mode for all
+            _, _, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores) # [batch size]
+            nll_loss = -gmm.log_prob(center_gt)
+            
+            # Filter out the noise prediction
+            if filter:
+                nll_loss_valid = (torch.abs(center_gt) < 1.5).all(dim=1) # filter out gt with large value
+                nll_loss = nll_loss[nll_loss_valid]
+                # print(center_gt_unnormalized[~nll_loss_valid])
+                
+            layer_loss = nll_loss.mean()
+            tb_dict[f'{tb_pre_tag}layer{i}_loss_nll'] = layer_loss.item()
+            
+            # record mean and std
+            # tb_dict[f'{tb_pre_tag}pred_mean'] = pred_ctrls.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_pred_std'] = pred_ctrls.std().item()
+            # tb_dict[f'{tb_pre_tag}score_mean'] = pred_scores.mean().item()
+            tb_dict[f'{tb_pre_tag}layer{i}_score_std'] = pred_scores.std().item()
+            total_loss += layer_loss
+            
         tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
-        
-        # record mean and std
-        tb_dict[f'{tb_pre_tag}pred_mean'] = pred_ctrls.mean().item()
-        tb_dict[f'{tb_pre_tag}pred_std'] = pred_ctrls.std().item()
-        tb_dict[f'{tb_pre_tag}score_mean'] = pred_scores.mean().item()
-        tb_dict[f'{tb_pre_tag}score_std'] = pred_scores.std().item()
         return total_loss, tb_dict
     
     def forward(self, batch_dict):
@@ -209,6 +225,9 @@ class BCDecoder(nn.Module):
         num_center_objects, num_objects, _ = obj_feature.shape
         
         center_objects_feature = obj_feature[torch.arange(num_center_objects), track_index_to_predict]
+        
+        # center_objects_feature_mask = obj_mask[torch.arange(num_center_objects), track_index_to_predict]
+        # assert center_objects_feature_mask.all(), f"Center object should be valid. {center_objects_feature_mask}"
         
         # center_objects_feature = batch_dict['center_objects_feature']
     
