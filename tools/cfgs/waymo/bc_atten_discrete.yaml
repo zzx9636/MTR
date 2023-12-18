@@ -25,8 +25,11 @@ MODEL:
 
     MOTION_DECODER:
         NAME: BCDecoder
-        TYPE: bicycle
+        TYPE: discrete
         PRED_ALL_LAYERS: True
+
+        NUM_ACCEL_GRID: 20
+        NUM_STEER_GRID: 20
 
         NUM_FUTURE_FRAMES: 80
         NUM_MOTION_MODES: 6
@@ -40,7 +43,6 @@ MODEL:
         NUM_BASE_MAP_POLYLINES: 256
         NUM_WAYPOINT_MAP_POLYLINES: 128
 
-        LOSS_MODE: 'best'
 
 OPTIMIZATION:
     BATCH_SIZE_PER_GPU: 64

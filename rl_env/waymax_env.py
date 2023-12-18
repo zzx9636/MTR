@@ -73,6 +73,9 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
             raise Warning("An agent is controlled by more than one policy")
         use_log = num_controlled == 0
         
+        # print("gt: ", gt_action_full.action.data[~use_log])
+        # print("sim: ", sim_agent_action_list[0].action.data[~use_log])
+        
         gt_action = actor_core.WaymaxActorOutput(
             action = gt_action_full.action,
             actor_state = None,

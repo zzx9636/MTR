@@ -1,11 +1,92 @@
-import numpy as np
-import torch
-from waymax import datatypes
+
 
 import numpy as np
 import jax
+import jax.numpy as jnp
+# set jax to cpu mode
 from typing import Dict, List
-    
+import torch
+from waymax import datatypes
+from waymax.utils import geometry
+from functools import partial
+
+
+
+
+@partial(jax.jit, static_argnums=(3,))
+def compute_inverse(
+    traj: datatypes.Trajectory,
+    timestep: jax.typing.ArrayLike,
+    dt: float = 0.1,
+    estimate_yaw_with_velocity: bool = True,
+) -> datatypes.Action:
+    """Runs inverse dynamics model to infer actions for specified timestep.
+
+    Inverse dynamics:
+    accel = (new_vel - vel) / dt
+    steering = (new_yaw - yaw) / (speed * dt + 1/2 * accel * dt ** 2)
+
+    Args:
+    traj: A Trajectory used to infer actions of shape (..., num_objects,
+        num_timesteps).
+    timestep: Index of time for actions.
+    dt: The time step length used in the simulator.
+    estimate_yaw_with_velocity: Whether to use the yaw recorded in `traj` for
+        estimating the inverse action or use the yaw estimated from velocities. It
+        is recommended to set this to True, as using the estimated yaw is
+        generally less noisy than using the yaw directly recorded in the
+        trajectory.
+
+    Returns:
+    An Action that converts traj[timestep] to traj[timestep+1] of shape
+        (..., num_objects, dim=2).
+    """
+    _SPEED_LIMIT = 0.6
+    xy_yaw_vel = jnp.stack(
+        [traj.x, traj.y, traj.yaw, traj.vel_x, traj.vel_y], axis=-1
+    )
+    xy_yaw_vel_slice = jax.lax.dynamic_slice_in_dim(
+        xy_yaw_vel, start_index=timestep, slice_size=2, axis=-2
+    )
+    # Each has shape (..., num_timesteps = 2, 1).
+    _, _, yaw, vel_x, vel_y = jnp.split(xy_yaw_vel_slice, 5, axis=-1)
+    valids = jax.lax.dynamic_slice_in_dim(
+        traj.valid, start_index=timestep, slice_size=2, axis=-1
+    )
+    valid = valids[..., 0:1] & valids[..., 1:2]
+    # Calculate acceleration.
+    speed = jnp.sqrt(vel_x[..., 0:2, :] ** 2 + vel_y[..., 0:2, :] ** 2)
+    new_speed = speed[..., 1:2, :]
+    accel = (new_speed - speed[..., 0:1, :]) / dt
+
+    # Calculate steering curvature.
+    new_yaw = geometry.wrap_yaws(yaw[..., 1:2, :])
+    yaw = geometry.wrap_yaws(yaw[..., 0:1, :])
+    if estimate_yaw_with_velocity:
+        real_yaw = jnp.arctan2(vel_y[..., 0:1, :], vel_x[..., 0:1, :])
+        real_new_yaw = jnp.arctan2(vel_y[..., 1:2, :], vel_x[..., 1:2, :])
+    else:
+        real_yaw = yaw
+        real_new_yaw = new_yaw
+    real_yaw = jnp.where(
+        jnp.abs(speed[..., 0:1, :]) <= _SPEED_LIMIT, yaw, real_yaw
+    )
+    real_new_yaw = jnp.where(
+        jnp.abs(new_speed) <= _SPEED_LIMIT, new_yaw, real_new_yaw
+    )
+    delta_yaw = geometry.wrap_yaws(real_new_yaw - real_yaw)
+    steering = delta_yaw / (speed[..., 0:1, :] * dt + 0.5 * accel * dt**2)
+    # Set steering to 0.0 if speed is 0 to avoid NaN error.
+    # When speed is small, delta_yaw sometimes can also be small, so the
+    # calculation of steering is affected by the data noise and can lead to
+    # overestimation of steering, filtering small speed can help to prevent
+    # overestimation of steering.
+    steering = jnp.where(jnp.abs(speed[..., 0:1, :]) < _SPEED_LIMIT, 0, steering)
+    steering = jnp.where(jnp.abs(speed[..., 1:2, :]) < _SPEED_LIMIT, 0, steering)
+    raw_action_array = jnp.concatenate([accel, steering], axis=-1).squeeze(-2)
+    action_array = jnp.where(valid, raw_action_array, 0.0)
+    return datatypes.Action(data=action_array, valid=valid)
+
 def merge_dict(batch_list: List, device: torch.device = 'cpu') -> Dict[str, torch.Tensor]:
     """Collects a batch of data from a list of transitions.
 
@@ -40,7 +121,7 @@ def process_input(
     is_controlled: np.ndarray,
     from_gt: bool = False,
     current_time_index: int = None,
-    visible_history: int = 1,
+    hide_history: int = 0,
     history_length: int = 11,
     dt: float = 0.1,
 ) -> Dict:
@@ -98,8 +179,12 @@ def process_input(
     
     # Remove non seeing history
     # print(obj_trajs_data.shape, len(track_index_to_predict))
-    # obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history, :] = 0.0
-    # obj_trajs_mask[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history] = False
+    if hide_history > 0:
+        visible_history = hide_history  
+    else:
+        visible_history = np.random.randint(11)+1
+    obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history, :] = 0.0
+    obj_trajs_mask[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history] = False
         
     polylines = _stack_map(scenario.roadgraph_points)
     
@@ -243,6 +328,13 @@ def generate_centered_trajs_for_agents(
     vel_pre = np.roll(vel, shift=1, axis=2)
     acce = (vel - vel_pre) / 0.1  # (num_centered_objects, num_objects, num_timestamps, 2)
     acce[:, :, 0, :] = acce[:, :, 1, :]
+    
+    acce_val = obj_trajs[:, :, :, -1]  # (num_centered_objects, num_objects, num_timestamps)
+    acce_val_pre = np.roll(acce_val, shift=1, axis=2)
+    acce_val = np.logical_and(acce_val, acce_val_pre)
+    acce_val[:, :, 0] = acce_val[:, :, 1]
+    acce[~acce_val] = 0 # remove invalid acce
+    
 
     ret_obj_trajs = np.concatenate((
         obj_trajs[:, :, :, 0:6], 

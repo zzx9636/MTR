@@ -61,17 +61,22 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             output = self.forward_decoder(encoded_state)
         
         pred_ctrls, pred_scores = output['pred_list'][-1]
-        _, _, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
+        # print(pred_ctrls[...,:2])
+        # print(pred_scores)
+        mode, mix, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
         sample_action = gmm.sample().detach().cpu()
-        sample_action = torch.clamp(sample_action, -1, 1)
+        # sample_action = torch.clamp(sample_action, -1, 1)
         actions_sampled = sample_action * self.motion_decoder.output_std.cpu() + self.motion_decoder.output_mean.cpu()
         actions_sampled = actions_sampled.numpy()
+        
+        # calculate the log prob
+        
         # print(actions_sampled)
         
         
-        # actions_sampled = self.sample(output)['sample'].detach().cpu().numpy()
+        # actions_sampled = self.sample_best(output)['sample'].detach().cpu().numpy()
         
-        return self.sample_to_action(actions_sampled, is_controlled)
+        return self.sample_to_action(actions_sampled, is_controlled), mode, mix, gmm
     
     def encoding_state(self, state: datatypes.SimulatorState, is_controlled: jax.Array = None):
         if is_controlled is None:
@@ -79,7 +84,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         # update the state
         state.object_metadata.is_modeled = is_controlled
         state.object_metadata.is_controlled = is_controlled
-        input_dict = process_input(state, is_controlled)
+        input_dict = process_input(state, is_controlled, hide_history=11)
         input_dict_batch = merge_dict([input_dict])
         
         encoded_state = self.forward_encoder(input_dict_batch)
@@ -182,7 +187,8 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             1, 
             sample_mode.unsqueeze(-1)
         ).squeeze(-1)  + sample_mode_log_prob
-                    
+        
+        # sample = torch.clamp(sample_action, -1, 1)                     
         sample = sample_action * self.motion_decoder.output_std + self.motion_decoder.output_mean
         
         sample_dict = {
@@ -213,6 +219,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         # take value from the best index
         sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :2]
         
+        # sample = torch.clamp(sample, -1, 1)
         sample = sample * cur_decoder.output_std + cur_decoder.output_mean
         
         sample_dict = {'sample': sample}

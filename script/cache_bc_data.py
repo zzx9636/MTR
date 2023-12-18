@@ -1,24 +1,23 @@
-import glob 
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+import tensorflow as tf
+# set tf to cpu only
+tf.config.set_visible_devices([], 'GPU')
+import jax
+jax.config.update('jax_platform_name', 'cpu')
+
 import pickle
 import numpy as np
 
-# turn off GPU in tensorflow
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
-import tensorflow as tf
-tf.config.experimental.set_visible_devices([], "GPU")
-
 # set jax device as cpu
-import jax
 from jax import numpy as jnp
-jax.config.update("jax_platform_name", "cpu")
-
 from tqdm import tqdm
 from typing import Dict, Tuple, List
 from waymax import datatypes
 from waymax import dataloader
 from waymax import config as waymax_config
-from waymax.dynamics import bicycle_model
+# from waymax.dynamics import bicycle_model
+from rl_env.env_utils import compute_inverse
 from matplotlib import pyplot as plt
 
 def preprocess(
@@ -112,7 +111,7 @@ def find_grid(scenario, t, interest_agent, accel_grid, steer_grid):
         (num_agent, 3), A 2D array containing the grid indices and validity information.
     """
     
-    action = bicycle_model.compute_inverse(scenario.log_trajectory, t)
+    action = compute_inverse(scenario.log_trajectory, t, 0.1, False)
     
     action_valid = action.valid.reshape(-1) & \
         (jnp.abs(action.data[:, 0]) < 15) & \
