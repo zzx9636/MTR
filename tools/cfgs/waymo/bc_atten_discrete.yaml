@@ -28,12 +28,9 @@ MODEL:
         TYPE: discrete
         PRED_ALL_LAYERS: True
 
-        NUM_ACCEL_GRID: 20
-        NUM_STEER_GRID: 20
-
-        NUM_FUTURE_FRAMES: 80
-        NUM_MOTION_MODES: 6
-
+        HIERARCHICAL_LEVELS: 4 # gird size 4, 8, 16, 32
+        HIERARCHICAL_WEIGHT: [0.4, 0.6, 0.8, 1]
+        
         D_MODEL: 256
         NUM_DECODER_LAYERS: 4
         NUM_ATTN_HEAD: 8
@@ -45,7 +42,7 @@ MODEL:
 
 
 OPTIMIZATION:
-    BATCH_SIZE_PER_GPU: 64
+    BATCH_SIZE_PER_GPU: 32
     MAX_STEPS: 1_000_000
     VAL_CHECK_INTERVAL: 5_000
     LIMIT_VAL_BATCHES: 500

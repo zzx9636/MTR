@@ -23,19 +23,26 @@ class BCDecoder(nn.Module):
         self.n_head = self.model_cfg.NUM_ATTN_HEAD
         self.dropout = self.model_cfg.get('DROPOUT_OF_ATTN', 0.1)
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
-        self.num_accel_grid = self.model_cfg.NUM_ACCEL_GRID
-        self.num_steer_grid = self.model_cfg.NUM_STEER_GRID
+        self.hierarchical_levels = self.model_cfg.get('HIERARCHICAL_LEVELS', 4)
+        self.cost_weight = self.model_cfg.HIERARCHICAL_WEIGHT
+        self.num_accel_grid = 2**(self.hierarchical_levels+1)
+        self.num_steer_grid = 2**(self.hierarchical_levels+1)
+        
         self.num_motion_modes = self.num_accel_grid * self.num_steer_grid
         self.pred_all_layers = self.model_cfg.get('PRED_ALL_LAYERS', True)
         
-        self.accel_grid = nn.Parameter(
-            torch.linspace(-10, 10, self.num_accel_grid),
-            requires_grad= False
-        )
-        self.steer_grid = nn.Parameter(
-            torch.linspace(-0.3, 0.3, self.num_steer_grid),
-            requires_grad= False
-        )
+        # self.accel_grid = [
+        #     nn.Parameter(
+        #         torch.linspace(-10, 10, 2**(i+1)),
+        #         requires_grad= False
+        #     ) for i in range(self.hierarchical_levels)
+        # ]
+        # self.steer_grid = [
+        #     nn.Parameter(
+        #         torch.linspace(-0.3, 0.3, 2**(i+1)),
+        #         requires_grad= False
+        #     ) for i in range(self.hierarchical_levels)
+        # ]
             
         self.accel_embed = nn.Embedding(self.num_accel_grid, self.d_model)
         self.steer_embed = nn.Embedding(self.num_steer_grid, self.d_model)
@@ -115,46 +122,97 @@ class BCDecoder(nn.Module):
                 without_norm = True       
             ) for _ in range(self.num_decoder_layers+1)])
         
-        self.register_buffer('output_mean', torch.tensor([0.0, 0.0]))
-        self.register_buffer('output_std', torch.tensor([3.5, 0.17]))
+        # self.register_buffer('output_mean', torch.tensor([0.0, 0.0]))
+        # self.register_buffer('output_std', torch.tensor([3.5, 0.17]))
         
     def get_loss(self, decoder_dict, tb_pre_tag='', debug = False):
         tb_dict = {}
         
         center_gt = decoder_dict['gt_action'] # [batch size, 2]
-        
-        # Find idx
-        accel_idx = torch.searchsorted(self.accel_grid, center_gt[:, 0])
-        steer_idx = torch.searchsorted(self.steer_grid, center_gt[:, 1])
-        best_idx = accel_idx * self.num_steer_grid + steer_idx
-        
+                
         total_loss = 0
         if debug:
-            _, axs = plt.subplots(1, len(decoder_dict['pred_list']), figsize=(10, 10))
-        for i, pred_logits in enumerate(decoder_dict['pred_list']):    
-            layer_loss = F.cross_entropy(input=pred_logits, target=best_idx, reduction='mean')
-            tb_dict[f'{tb_pre_tag}layer{i}_loss'] = layer_loss.item()            
+            print(center_gt)
+        for i, pred_logits in enumerate(decoder_dict['pred_list']):  
+            layer_loss = 0
+            loss_list = self.hierarchical_cross_entropy(center_gt, pred_logits, debug)  
+            for l, loss in enumerate(loss_list):
+                layer_loss += loss * self.cost_weight[l]
+                tb_dict[f'{tb_pre_tag}loss_d{i}_h{l}'] = loss.item()
             total_loss += layer_loss
-            if debug:
-                prob = F.softmax(pred_logits, dim=-1)
-                im = axs[i].contourf(
-                    self.accel_grid.detach().cpu().numpy(),
-                    self.steer_grid.detach().cpu().numpy(),
-                    prob.reshape((self.num_accel_grid, self.num_steer_grid)).detach().cpu().numpy(),
-                    # aspect='square'
-                )
-                axs[i].set_aspect(10/0.3)
-                plt.colorbar(im, ax=axs[i], shrink=0.2, aspect=20)
-                axs[i].set_title(f'layer {i}')
-        
-        
         # Average over layers    
-        total_loss /= len(decoder_dict['pred_list'])
         tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
             
         return total_loss, tb_dict
-
     
+    def partiton_and_sum(self, input, p):
+        # ! Basically a 2D convolution with kernel size p and stride p
+        # ! However, 2d conv gives an segmentation fault
+        # input: [..., A, B]
+        # p: int, partition_size
+        # output: [..., A//p, B//p]
+        output = 0
+        for i in range(p):
+            for j in range(p):
+                output += input[..., i::p, j::p]
+        return output
+    
+    def hierarchical_cross_entropy(self, center_gt, pred_logits, debug = False):
+        loss_list = []
+        # Find idx
+        batch_size = center_gt.shape[0]
+        pred_prob = F.softmax(pred_logits, dim=-1) #[batch size, self.num_accel_grid*self.num_steer_grid]
+        pred_prob = pred_prob.reshape((batch_size, self.num_accel_grid, self.num_steer_grid)).contiguous() #[batch size, accel_grid, steer_grid]
+        
+        if debug:
+            _, axs = plt.subplots(1, self.hierarchical_levels, sharey=True, layout='constrained')
+            
+        for l in range(self.hierarchical_levels):
+            accel = center_gt[:, 0].contiguous()    
+            steer = center_gt[:, 1].contiguous()
+            grid_dim = 2**(l+2)
+            accel_grid = torch.linspace(-10, 10, grid_dim+1, device=center_gt.device)
+            steer_grid = torch.linspace(-0.3, 0.3, grid_dim+1, device=center_gt.device)
+
+            accel_idx = torch.searchsorted(accel_grid[1:-1], accel)
+            steer_idx = torch.searchsorted(steer_grid[1:-1], steer)
+            best_idx = accel_idx * grid_dim + steer_idx
+            
+            if l == self.hierarchical_levels - 1:
+                # last layer
+                pred_prob_agg = pred_prob
+            else:
+                kernel_size = 2**(self.hierarchical_levels - l - 1)
+                pred_prob_agg = self.partiton_and_sum(pred_prob, kernel_size)
+                
+            pred_prob_agg = pred_prob_agg.reshape(batch_size, grid_dim*grid_dim).contiguous() #[batch size, accel_grid*steer_grid]
+                
+            # # calculate cross entropy loss
+            loss = -torch.log(pred_prob_agg[torch.arange(batch_size), best_idx]).mean()
+            loss_list.append(loss)
+            
+            if debug:
+                im = axs[l].imshow(
+                    pred_prob_agg.reshape((grid_dim, grid_dim)).detach().cpu().numpy(),
+                    extent=[steer_grid[0].detach().cpu().numpy(),
+                            steer_grid[-1].detach().cpu().numpy(), 
+                            accel_grid[-1].detach().cpu().numpy(),
+                            accel_grid[0].detach().cpu().numpy()],
+                    # vmin=0, vmax=1
+                )
+
+                axs[l].set_xlabel('steer')
+                if l == 0:
+                    axs[l].set_ylabel('accel')
+                axs[l].set_aspect(0.3/10)
+                # mark ground truth
+                axs[l].scatter(center_gt[:, 1].detach().cpu().numpy(), center_gt[:, 0].detach().cpu().numpy(), c='r', s=10, marker='x')
+                # if l == self.hierarchical_levels - 1:
+                #     plt.colorbar(im, ax=axs[l], shrink=0.2, aspect=20)
+                axs[l].set_title(f'Grid {grid_dim}, loss {loss.item():.3f}', fontsize=8)
+                
+        return loss_list
+            
     def forward(self, batch_dict):
         # Aggregate features over the history 
         obj_feature, obj_mask, obj_pos = batch_dict['obj_feature'].cuda(), batch_dict['obj_mask'].cuda(), batch_dict['obj_pos'].cuda()
@@ -276,3 +334,38 @@ class BCDecoder(nn.Module):
                 
         # load the filtered state_dict
         self.load_state_dict(state_dict_filtered, strict=True)
+    
+    def sample(self, decoder_dict, best: bool = False):
+        pred_logits = decoder_dict['pred_list'][-1]
+        
+        
+        grid_dim = 2**(self.hierarchical_levels+1)
+        accel_grid = torch.linspace(-10, 10, grid_dim+1, device=pred_logits.device)
+        steer_grid = torch.linspace(-0.3, 0.3, grid_dim+1, device=pred_logits.device)
+        
+        # choose the action
+        if best:
+            pred_prob = F.softmax(pred_logits, dim=-1) #[batch size, self.num_accel_grid*self.num_steer_grid]
+            select_idx = pred_prob.argmax(dim=-1) #[batch size]
+            log_p = torch.log(pred_prob[torch.arange(pred_prob.shape[0]), select_idx])
+        else:
+            distribution = Categorical(logits=pred_logits)
+            select_idx = distribution.sample()
+            log_p = distribution.log_prob(select_idx)
+        
+        
+        accel_idx = select_idx // grid_dim
+        steer_idx = select_idx % grid_dim
+        # print(select_idx, accel_idx, steer_idx)
+        
+        accel = (accel_grid[accel_idx] + accel_grid[accel_idx+1])/2
+        steer = (steer_grid[steer_idx] + steer_grid[steer_idx+1])/2
+        
+        control = torch.stack([accel, steer], dim=-1)
+        return {
+            'sample': control,
+            'log_p': log_p
+        }
+        
+        
+            

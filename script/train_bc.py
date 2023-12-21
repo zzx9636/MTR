@@ -85,7 +85,7 @@ def train(
         callbacks=[
             ModelCheckpoint(
                 dirpath = f'output/bc_{decoder_type}_{num_decoder}_{freeze_str}',
-                save_top_k=10,
+                save_top_k=100,
                 save_weights_only = True,
                 monitor='val/loss_total', 
                 every_n_epochs = 1,

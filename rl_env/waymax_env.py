@@ -81,11 +81,9 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
             actor_state = None,
             is_controlled = use_log
         )
-        
         # merge the action
         sim_agent_action_list.append(gt_action)
         action_merged = agents.merge_actions(sim_agent_action_list)
-        
         next_state = self.jit_step(current_state, action_merged)
         
         return next_state

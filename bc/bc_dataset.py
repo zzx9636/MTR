@@ -2,15 +2,11 @@ import torch
 from torch.utils.data import IterableDataset
 import pickle
 import os
-from rl_env.env_utils import merge_dict, process_input
+from rl_env.env_utils import merge_dict, process_input, compute_inverse
 from waymax import datatypes
 import numpy as np
 from typing import List
 import jax
-
-from waymax.dynamics.bicycle_model import compute_inverse
-
-
 
 class BCDataset(IterableDataset):
     def __init__(
@@ -48,7 +44,7 @@ class BCDataset(IterableDataset):
         
         self.compute_inverse_jit = jax.jit(compute_inverse, static_argnums=(3))
             
-    def retrive_one(self, cache: List, sanity_check: bool = False):
+    def retrive_one(self, cache: List, sanity_check: bool = False, hide_history: int = 0):
         """
         Retrieves a single example from the dataset based on the given cache.
 
@@ -60,8 +56,9 @@ class BCDataset(IterableDataset):
         """
         scenario_idx = cache[0]
         scenario_id = self.scenario_id_list[scenario_idx]
-        t_idx = cache[1]
-        a_idx = cache[2]
+        
+        a_idx = cache[1]
+        t_idx = cache[2]
         
         scenario_filename = os.path.join(self.data_path, 'scenario_'+scenario_id+'.pkl')
         
@@ -69,7 +66,7 @@ class BCDataset(IterableDataset):
         with open(scenario_filename, 'rb') as f:
             scenario_dict = pickle.load(f)
         scenario: datatypes.SimulatorState = scenario_dict['scenario']
-        # full_action_gt: np.ndarray = scenario_dict['action_gt'] #(T, A, 2)
+        full_action_gt: np.ndarray = scenario_dict['action_gt'] #(T, A, 2)
                 
         is_controlled = np.zeros(32, dtype=bool)
         is_controlled[a_idx] = True 
@@ -78,15 +75,10 @@ class BCDataset(IterableDataset):
             is_controlled=is_controlled,
             from_gt=True,
             current_time_index=t_idx,
+            hide_history=hide_history,
         )
         
-        # input_dict['gt_action'] = full_action_gt[t_idx, a_idx:a_idx+1, :]
-        input_dict['gt_action'] = np.asarray(self.compute_inverse_jit(scenario.log_trajectory, t_idx, 0.1, False).data)[a_idx:a_idx+1]
-        
-        # Verify the control
-        if sanity_check:
-            action_ref = compute_inverse(scenario.log_trajectory, t_idx).data[a_idx]
-            assert np.allclose(action_ref, input_dict['gt_action'], atol=1e-2), f'in dataset, action_ref: {action_ref}, gt_action: {input_dict["gt_action"]}'
+        input_dict['gt_action'] = full_action_gt[a_idx, t_idx:t_idx+1, :]
         
         input_dict['scenario_id'] = [scenario_id]
         input_dict['t'] = [t_idx]

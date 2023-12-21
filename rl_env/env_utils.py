@@ -7,11 +7,179 @@ import jax.numpy as jnp
 from typing import Dict, List
 import torch
 from waymax import datatypes
-from waymax.utils import geometry
+from waymax.utils.geometry import wrap_yaws
 from functools import partial
 
+from scipy.signal import savgol_filter
+from scipy.interpolate import interp1d
 
+def smooth_scenario(scenario: datatypes.SimulatorState, window_size=51, polyorder=3):
+    """
+    Smooths the trajectory of a scenario by applying a Savitzky-Golay filter to the velocity data.
 
+    Args:
+        scenario (datatypes.SimulatorState): The scenario to be smoothed.
+        window_size (int, optional): The size of the window used for the Savitzky-Golay filter. Defaults to 51.
+        polyorder (int, optional): The order of the polynomial used for the Savitzky-Golay filter. Defaults to 3.
+
+    Returns:
+        datatypes.SimulatorState: The smoothed scenario.
+    """
+    traj = scenario.log_trajectory
+    original_valid = np.asarray(traj.valid)
+    vel = np.stack(
+        [traj.vel_x, traj.vel_y, np.sin(traj.yaw), np.cos(traj.yaw)], axis=-1
+    )
+    num_agent, num_step = traj.valid.shape
+    smoothed_vel_x = np.zeros_like(traj.vel_x)
+    smoothed_vel_y = np.zeros_like(traj.vel_y)
+    smoothed_yaw = np.zeros_like(traj.yaw)
+    filtered_valid = np.zeros_like(traj.valid, dtype=bool)
+    t = np.arange(num_step)
+
+    for i in range(num_agent):
+        # Extract raw data and valid mask
+        valid = original_valid[i]
+        t_valid = t[valid]
+        vel_valid = vel[i][valid, :]
+        valid_idx = np.where(valid)[0]
+        
+        if len(valid_idx) == 0: # skip if no valid data
+            continue
+        
+        # Use zscore to filter out outliers
+        std = np.std(vel_valid, axis=-2, keepdims=True) + 1e-5
+        mean = np.mean(vel_valid, axis=-2, keepdims=True)
+        z = np.abs((vel_valid-mean)/std)
+        filtered_idx = np.all(z < 4, axis=-1)
+        valid_idx = valid_idx[filtered_idx]
+        
+        if len(valid_idx) == 0: # skip if no valid data
+            continue
+        
+        first_valid_idx = valid_idx[0]
+        last_valid_idx = valid_idx[-1]
+        if (last_valid_idx - first_valid_idx)<=3:
+            continue
+        # Extract valid velocity data and interpolate
+        t_valid = t[valid_idx]
+
+        vel_valid = vel[i][valid_idx, :]
+        vel_interp = interp1d(t_valid, vel_valid, axis=0, kind='linear')
+
+        t_interped = np.arange(first_valid_idx, last_valid_idx+1)
+        vel_interped = vel_interp(t_interped)
+        
+        # Smooth the interpolated data
+        vel_smoothed = savgol_filter(vel_interped,
+                        min(last_valid_idx-first_valid_idx, window_size),
+                        polyorder,
+                        axis=0
+                        )
+        
+        # update smoothed velocity
+        smoothed_vel_x[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 0]
+        smoothed_vel_y[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 1]
+        smoothed_yaw[i, first_valid_idx:last_valid_idx+1] = np.arctan2(vel_smoothed[:, 2], vel_smoothed[:, 3])
+        filtered_valid[i, first_valid_idx:last_valid_idx+1] = True
+
+    # Update trajectory
+    scenario.log_trajectory.vel_x = smoothed_vel_x
+    scenario.log_trajectory.vel_y = smoothed_vel_y
+    scenario.log_trajectory.yaw = smoothed_yaw
+    scenario.log_trajectory.valid = jnp.logical_and(scenario.log_trajectory.valid, filtered_valid)
+
+    return scenario
+
+def inverse_control(scenario: datatypes.SimulatorState, window_size=51, polyorder=3):
+    """
+    Applies inverse control to the given scenario's log_trajectory.
+
+    Args:
+        scenario (datatypes.SimulatorState): The scenario containing the log_trajectory.
+        window_size (int, optional): The window size for smoothing the interpolated data. Defaults to 51.
+        polyorder (int, optional): The order of the polynomial used for smoothing. Defaults to 3.
+
+    Returns:
+        tuple: A tuple containing the following elements:
+            - action (numpy.ndarray): The estimated control action.
+            - action_valid (numpy.ndarray): A mask indicating the validity of each action.
+    """    
+    traj = scenario.log_trajectory
+    original_valid = np.asarray(traj.valid)
+    vel = np.stack(
+        [traj.vel_x, traj.vel_y, np.sin(traj.yaw), np.cos(traj.yaw)], axis=-1
+    )
+
+    num_agent, num_step = traj.valid.shape
+    smoothed_vel_x = np.zeros_like(traj.vel_x)
+    smoothed_vel_y = np.zeros_like(traj.vel_y)
+    smoothed_yaw = np.zeros_like(traj.yaw)
+    smoothed_valid = np.zeros_like(traj.valid, dtype=bool)
+
+    t = np.arange(num_step)
+
+    for i in range(num_agent):
+        # Extract raw data and valid mask
+        valid = original_valid[i]
+        t_valid = t[valid]
+        vel_valid = vel[i][valid, :]
+        valid_idx = np.where(valid)[0]
+            
+        if len(valid_idx) == 0: # skip if no valid data
+            continue
+        
+        # Use zscore to filter out outliers
+        std = np.std(vel_valid, axis=-2, keepdims=True) + 1e-5
+        mean = np.mean(vel_valid, axis=-2, keepdims=True)
+        z = np.abs((vel_valid-mean)/std)
+        filtered_idx = np.all(z < 4, axis=-1)
+        valid_idx = valid_idx[filtered_idx]
+        
+        if len(valid_idx) == 0: # skip if no valid data
+            continue
+
+        first_valid_idx = valid_idx[0]
+        last_valid_idx = valid_idx[-1]
+        if (last_valid_idx - first_valid_idx) <= 3:
+            continue
+        
+        # Extract valid velocity data and interpolate
+        t_valid = t[valid_idx]
+
+        vel_valid = vel[i][valid_idx, :]
+        vel_interp = interp1d(t_valid, vel_valid, axis=0, kind='linear')
+
+        t_interped = np.arange(first_valid_idx, last_valid_idx+1)
+        vel_interped = vel_interp(t_interped)
+        
+        # Smooth the interpolated data
+        vel_smoothed = savgol_filter(vel_interped,
+                        min(last_valid_idx-first_valid_idx, window_size),
+                        polyorder,
+                        axis=0
+                    )
+        
+        # update smoothed velocity
+        smoothed_vel_x[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 0]
+        smoothed_vel_y[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 1]
+        smoothed_yaw[i, first_valid_idx:last_valid_idx+1] = np.arctan2(vel_smoothed[:, 2], vel_smoothed[:, 3])
+        smoothed_valid[i, first_valid_idx:last_valid_idx+1] = True
+        
+    smoothed_valid = np.logical_and(smoothed_valid, original_valid)
+    speed = np.sqrt(smoothed_vel_x*smoothed_vel_x + smoothed_vel_y*smoothed_vel_y)
+
+    # Estimate control  
+    accel = np.diff(speed, axis=-1) / 0.1
+    delta_yaw = wrap_yaws(np.diff(smoothed_yaw, axis=-1))
+    steering = delta_yaw / np.clip((speed[:, :-1]*0.1+0.5*accel*0.01 +1e-5), 1e-3, None)
+    steering = np.where(speed[...,:-1] > 0.6, steering, 0) 
+
+    # Concat 
+    action = np.stack([accel, steering], axis=-1)
+    action_valid = np.logical_and(smoothed_valid[:, 1:], smoothed_valid[:, :-1])
+
+    return action, action_valid
 
 @partial(jax.jit, static_argnums=(3,))
 def compute_inverse(

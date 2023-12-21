@@ -53,30 +53,13 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         rng: jax.Array,
     ) -> agents.WaymaxActorOutput:
         """Selects an action given the current simulator state."""
-        
-        # actor_type = actor_state['actor_type']
-        # del params, actor_state, rng        
         with torch.no_grad():
             encoded_state, is_controlled = self.encoding_state(state)
             output = self.forward_decoder(encoded_state)
+         
+        actions_sampled = self.motion_decoder.sample(output, False)['sample'].detach().cpu().numpy()
         
-        pred_ctrls, pred_scores = output['pred_list'][-1]
-        # print(pred_ctrls[...,:2])
-        # print(pred_scores)
-        mode, mix, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
-        sample_action = gmm.sample().detach().cpu()
-        # sample_action = torch.clamp(sample_action, -1, 1)
-        actions_sampled = sample_action * self.motion_decoder.output_std.cpu() + self.motion_decoder.output_mean.cpu()
-        actions_sampled = actions_sampled.numpy()
-        
-        # calculate the log prob
-        
-        # print(actions_sampled)
-        
-        
-        # actions_sampled = self.sample_best(output)['sample'].detach().cpu().numpy()
-        
-        return self.sample_to_action(actions_sampled, is_controlled), mode, mix, gmm
+        return self.sample_to_action(actions_sampled, is_controlled)
     
     def encoding_state(self, state: datatypes.SimulatorState, is_controlled: jax.Array = None):
         if is_controlled is None:
@@ -149,82 +132,6 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         encoder_dict = self.forward_encoder(batch_dict)
         output_dict = self.forward_decoder(encoder_dict)
         return output_dict
-
-    def sample(self, output_dict):
-        """
-        Sample a trajectory from the motion decoder.
-
-        Args:
-            batch_dict (dict): The batch dictionary.
-
-        Returns:
-            output_dict: The batch dictionary with the sampled trajectory added.
-        """
-    
-        
-        pred_ctrls, pred_scores = output_dict['pred_list'][-1]
-        mode, mix, gmm = self.motion_decoder.build_gmm_distribution(pred_ctrls, pred_scores)
-        
-        # sample_action = gmm.sample()
-        mode: torch.distributions.MultivariateNormal
-        mix: torch.distributions.Categorical
-        
-        # Sample from all Gaussian
-        sample_all = mode.rsample() # [Batch, M, 3]
-        sample_all_log_prob = mode.log_prob(sample_all)
-        
-        sample_mode = mix.sample() # [Batch]
-        sample_mode_log_prob = mix.log_prob(sample_mode)
-        
-        sample_action = torch.gather(
-            sample_all, 
-            1, 
-            sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
-        ).squeeze(-2)
-        
-        sample_action_log_prob = torch.gather(
-            sample_all_log_prob, 
-            1, 
-            sample_mode.unsqueeze(-1)
-        ).squeeze(-1)  + sample_mode_log_prob
-        
-        # sample = torch.clamp(sample_action, -1, 1)                     
-        sample = sample_action * self.motion_decoder.output_std + self.motion_decoder.output_mean
-        
-        sample_dict = {
-            'sample': sample,
-            'log_prob': sample_action_log_prob
-        }
-            
-        return sample_dict
-    
-    def sample_best(self, output_dict):
-        """
-        Sample a trajectory from the motion decoder.
-
-        Args:
-            batch_dict (dict): The batch dictionary.
-
-        Returns:
-            output_dict: The batch dictionary with the sampled trajectory added.
-        """
-    
-        cur_decoder = self.motion_decoder
-        
-        pred_ctrls, pred_scores = output_dict['pred_list'][-1]
-        # print(pred_ctrls[...,:2])
-        
-        best_idx = torch.argmax(pred_scores, dim=-1)
-        
-        # take value from the best index
-        sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :2]
-        
-        # sample = torch.clamp(sample, -1, 1)
-        sample = sample * cur_decoder.output_std + cur_decoder.output_mean
-        
-        sample_dict = {'sample': sample}
-        
-        return sample_dict
     
     ##### Utility functions #####
     def eval(self):

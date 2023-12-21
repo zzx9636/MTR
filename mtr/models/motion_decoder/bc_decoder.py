@@ -339,3 +339,49 @@ class BCDecoder(nn.Module):
                 
         # load the filtered state_dict
         self.load_state_dict(state_dict_filtered, strict=True)
+        
+    def sample(self, output_dict, best = False):
+        """
+        Sample a trajectory from the motion decoder.
+
+        Args:
+            batch_dict (dict): The batch dictionary.
+
+        Returns:
+            output_dict: The batch dictionary with the sampled trajectory added.
+        """
+        pred_ctrls, pred_scores = output_dict['pred_list'][-1]
+        mode, mix, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores)
+        
+        if best:
+            best_idx = torch.argmax(pred_scores, dim=-1)
+            sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :2]
+            sample_action_log_prob = gmm.log_prob(sample)
+            # sample = torch.clamp(sample, -1, 1)
+            sample = sample * self.output_std + self.output_mean
+        else:
+            # Sample from all Gaussian
+            sample_all = mode.rsample() # [Batch, M, 3]
+            sample_all_log_prob = mode.log_prob(sample_all)
+            
+            sample_mode = mix.sample() # [Batch]
+            sample_mode_log_prob = mix.log_prob(sample_mode)
+            
+            sample_action = torch.gather(
+                sample_all, 
+                1, 
+                sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
+            ).squeeze(-2)
+            
+            sample_action_log_prob = torch.gather(
+                sample_all_log_prob, 
+                1, 
+                sample_mode.unsqueeze(-1)
+            ).squeeze(-1)  + sample_mode_log_prob
+            
+            sample = sample_action * self.output_std + self.output_mean
+            
+        return {
+                'sample': sample,
+                'log_prob': sample_action_log_prob
+            }

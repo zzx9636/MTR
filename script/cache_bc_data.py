@@ -17,7 +17,7 @@ from waymax import datatypes
 from waymax import dataloader
 from waymax import config as waymax_config
 # from waymax.dynamics import bicycle_model
-from rl_env.env_utils import compute_inverse
+from rl_env.env_utils import inverse_control
 from matplotlib import pyplot as plt
 
 def preprocess(
@@ -37,7 +37,7 @@ def preprocess(
     return dataloader.preprocess_womd_example(
         deserialized,
         aggregate_timesteps=True,
-        max_num_objects=32,
+        max_num_objects=None,
     )
 
 @jax.jit
@@ -95,34 +95,57 @@ def find_pred(scenario: datatypes.SimulatorState):
     
     return is_sdc & is_modeled & is_vehicle
 
-@jax.jit
-def find_grid(scenario, t, interest_agent, accel_grid, steer_grid):
-    """
-    Finds the grid indices for the given scenario, time step, and validity conditions.
+# @jax.jit
+# def find_grid(scenario, t, interest_agent, accel_grid, steer_grid):
+#     """
+#     Finds the grid indices for the given scenario, time step, and validity conditions.
 
+#     Args:
+#         scenario: The scenario object.
+#         t: The time step.
+#         interest_agent: (num_agent,) A boolean array indicating the validity of each action.
+#         accel_grid: (num_accel_bins,) A 1D array containing the acceleration grid values.
+#         steer_grid: (num_steer_bins,) A 1D array containing the steering grid values.
+
+#     Returns:
+#         (num_agent, 3), A 2D array containing the grid indices and validity information.
+#     """
+    
+#     action = compute_inverse(scenario.log_trajectory, t, 0.1, False)
+    
+#     action_valid = action.valid.reshape(-1) & \
+#         (jnp.abs(action.data[:, 0]) < 15) & \
+#         (jnp.abs(action.data[:, 1]) < 0.45) & \
+#         interest_agent
+    
+#     accel_idx = jnp.searchsorted(accel_grid, action.data[:, 0])
+#     steer_idx = jnp.searchsorted(steer_grid, action.data[:, 1])
+    
+#     return jnp.stack([accel_idx, steer_idx, action_valid], axis=-1), action.data
+
+def find_grid(scenario, interest_agent, accel_grid, steer_grid):
+    """
+    Find the grid indices for acceleration and steering actions based on the ground truth actions.
+    
     Args:
-        scenario: The scenario object.
-        t: The time step.
-        interest_agent: (num_agent,) A boolean array indicating the validity of each action.
-        accel_grid: (num_accel_bins,) A 1D array containing the acceleration grid values.
-        steer_grid: (num_steer_bins,) A 1D array containing the steering grid values.
-
+        scenario (str): The scenario name.
+        interest_agent (bool): Boolean mask indicating the interest of each agent.
+        accel_grid (np.ndarray): Array of acceleration grid values.
+        steer_grid (np.ndarray): Array of steering grid values.
+    
     Returns:
-        (num_agent, 3), A 2D array containing the grid indices and validity information.
+        np.ndarray: Array of grid indices for acceleration, steering, and validity.
+        np.ndarray: Array of ground truth actions.
     """
     
-    action = compute_inverse(scenario.log_trajectory, t, 0.1, False)
+    gt_action, action_valid = inverse_control(scenario) # [num_agents, t, 2]
     
-    action_valid = action.valid.reshape(-1) & \
-        (jnp.abs(action.data[:, 0]) < 15) & \
-        (jnp.abs(action.data[:, 1]) < 0.45) & \
-        interest_agent
-    
-    accel_idx = jnp.searchsorted(accel_grid, action.data[:, 0])
-    steer_idx = jnp.searchsorted(steer_grid, action.data[:, 1])
-    
-    return jnp.stack([accel_idx, steer_idx, action_valid], axis=-1), action.data
+    accel_idx = np.searchsorted(accel_grid, gt_action[..., 0]) # [num_agents, t]
+    steer_idx = np.searchsorted(steer_grid, gt_action[..., 1]) # [num_agents, t]
+    valid_grid = np.logical_and(interest_agent[..., None], action_valid) # [num_agents, t]
 
+    return np.stack([accel_idx, steer_idx, valid_grid], axis=-1), gt_action
+    
 def record_cache(key, dest, grid_idx, scenario_idx)->None:
     """
     Record cache information for a given key.
@@ -135,13 +158,13 @@ def record_cache(key, dest, grid_idx, scenario_idx)->None:
     """
     
     i, j = key
-    t_idx_array, a_idx_array = np.where(
+    a_idx_array, t_idx_array = np.where(
         (grid_idx[:, :, 0] == i) &
         (grid_idx[:, :, 1] == j) &
         (grid_idx[:, :, 2] == 1)
     )
     scenario_idx_array = np.ones_like(t_idx_array, dtype=int)*scenario_idx
-    match_idx = np.stack([scenario_idx_array, t_idx_array, a_idx_array], axis=-1)
+    match_idx = np.stack([scenario_idx_array, a_idx_array, t_idx_array], axis=-1)
     dest.extend(match_idx.tolist())
     
 def cache_one_scenario(
@@ -155,11 +178,15 @@ def cache_one_scenario(
     interest_agent = find_pred(scenario)
     
     # Find corresponding grid indices of each agnet at each time step of the scenario
-    grid_idx, action_gt = jax.vmap(find_grid, in_axes=(None, 0, None, None, None))(scenario, jnp.arange(90), interest_agent, accel_grid, steer_grid)
-    grid_idx = np.asarray(grid_idx)
+    # grid_idx, action_gt = jax.vmap(find_grid, in_axes=(None, 0, None, None, None))(scenario, jnp.arange(90), interest_agent, accel_grid, steer_grid)
+    # grid_idx = np.asarray(grid_idx)
+    
+    grid_idx, action_gt = find_grid(scenario, interest_agent, accel_grid, steer_grid)
+    
     for key, dest in idx_cache.items():
         record_cache(key, dest, grid_idx, scenario_idx)
-    return np.asarray(action_gt) # [T, num_agents, 2]
+        
+    return action_gt # [num_agents, T, 2]
             
 def cache_all_files(
     base_path: str,
@@ -224,15 +251,20 @@ if __name__ == "__main__":
     accel_grid = jnp.linspace(-10, 10, 20)
     steer_grid = jnp.linspace(-0.3, 0.3, 20)
     
+    print("Extracting Validation set")
+    # Validation set
+    base_path = '/Data/Dataset/Waymo/V1_2_tf/validation/validation_tfexample.tfrecord@150'
+    output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_extracted/'
+    cache_all_files(base_path, accel_grid, steer_grid, output_path)
+    
+    print("Extracting Validation Interactive set")
+    base_path='/Data/Dataset/Waymo/V1_2_tf/validation_interactive/validation_interactive_tfexample.tfrecord@150',
+    output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_interactive_extracted/'
+    cache_all_files(base_path, accel_grid, steer_grid, output_path)
+    
+    print("Extracting Training set")
     # Training set
     base_path = '/Data/Dataset/Waymo/V1_2_tf/training/training_tfexample.tfrecord@1000'
     output_path = '/Data/Dataset/Waymo/V1_2_tf/training_extracted/'
-    
-    # Validation set
-    # base_path = '/Data/Dataset/Waymo/V1_2_tf/validation/validation_tfexample.tfrecord@150'
-    # output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_extracted/'
-    
-    # base_path='/Data/Dataset/Waymo/V1_2_tf/validation_interactive/validation_interactive_tfexample.tfrecord@150',
-    # output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_interactive_extracted/'
     cache_all_files(base_path, accel_grid, steer_grid, output_path)
     
