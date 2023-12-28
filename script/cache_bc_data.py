@@ -17,7 +17,7 @@ from waymax import datatypes
 from waymax import dataloader
 from waymax import config as waymax_config
 # from waymax.dynamics import bicycle_model
-from rl_env.env_utils import inverse_control
+from rl_env.env_utils import inverse_unicycle_control, smooth_scenario
 from matplotlib import pyplot as plt
 
 def preprocess(
@@ -138,7 +138,7 @@ def find_grid(scenario, interest_agent, accel_grid, steer_grid):
         np.ndarray: Array of ground truth actions.
     """
     
-    gt_action, action_valid = inverse_control(scenario) # [num_agents, t, 2]
+    gt_action, action_valid = inverse_unicycle_control(scenario) # [num_agents, t, 2]
     
     accel_idx = np.searchsorted(accel_grid, gt_action[..., 0]) # [num_agents, t]
     steer_idx = np.searchsorted(steer_grid, gt_action[..., 1]) # [num_agents, t]
@@ -185,21 +185,21 @@ def cache_one_scenario(
     
     for key, dest in idx_cache.items():
         record_cache(key, dest, grid_idx, scenario_idx)
-        
     return action_gt # [num_agents, T, 2]
             
 def cache_all_files(
     base_path: str,
-    accel_grid: jax.Array,
-    steer_grid: jax.Array,
+    accel_grid: np.ndarray,
+    steer_grid: np.ndarray,
     output_path: str,
+    smooth = True,
 ):
     tf_dataset = dataloader.tf_examples_dataset(
         path=base_path,
         data_format=waymax_config.DataFormat.TFRECORD,
         preprocess_fn=preprocess,
         repeat=1,
-        num_shards=8,
+        num_shards=4,
         deterministic=True,
     )
     os.makedirs(output_path, exist_ok=True)
@@ -207,19 +207,24 @@ def cache_all_files(
     # initialize cache
     scenario_id_list = []
     idx_cache = {}
-    for i in range(accel_grid.shape[0]):
-        for j in range(steer_grid.shape[0]):
+    for i in range(len(accel_grid)+1):
+        for j in range(len(steer_grid)+1):
             idx_cache[(i, j)] = []
             
     for scenario_idx, example in enumerate(tqdm(tf_dataset.as_numpy_iterator())):
         scenario_id_binary, scenario = postprocess(example)
         scenario_id = scenario_id_binary.tobytes().decode('utf-8')
         scenario_id_list.append(scenario_id)
+        
+        if smooth:
+            scenario = smooth_scenario(scenario)
         action_gt = cache_one_scenario(scenario, scenario_idx, accel_grid, steer_grid, idx_cache)
         
         scenario_filename = os.path.join(output_path, 'scenario_'+scenario_id+'.pkl')
         with open(scenario_filename, 'wb') as f:
             pickle.dump({'scenario': scenario, 'action_gt': action_gt}, f)
+        # if scenario_idx > 10000:
+        #     break
             
     print('Extracted {} scenarios'.format(scenario_idx))
     
@@ -227,44 +232,44 @@ def cache_all_files(
     output_dict = {
         'scenario_id_list': scenario_id_list,
         'idx_cache': idx_cache,
-        'accel_grid': np.asarray(accel_grid),
-        'steer_grid': np.asarray(steer_grid),
+        'accel_grid': accel_grid,
+        'steer_grid': steer_grid,
     }
     cache_filename = os.path.join(output_path, 'cache.pkl')
     with open(cache_filename, 'wb') as f:
         pickle.dump(output_dict, f)
         
     # plot histogram
-    histogram = np.zeros((len(accel_grid), len(steer_grid)), dtype=int)
+    histogram = np.zeros((len(accel_grid)+1, len(steer_grid)+1), dtype=int)
     for key, dest in idx_cache.items():
         i,j = key
         histogram[i,j] = len(dest)
         
-    plt.imshow(np.log(histogram+1), extent=[accel_grid[0], accel_grid[-1], steer_grid[0], steer_grid[-1]], origin='lower', aspect='auto')
-    plt.xlabel('acceleration')
-    plt.ylabel('steering')
+    plt.imshow(np.log(histogram+1), extent=[steer_grid[0], steer_grid[-1], accel_grid[0], accel_grid[-1]], origin='lower', aspect='auto')
+    plt.ylabel('acceleration')
+    plt.xlabel('steering')
     plt.colorbar()
     fig_filename = os.path.join(output_path,'histogram.png')
     plt.savefig(fig_filename, dpi=300, bbox_inches='tight')
     
 if __name__ == "__main__":
-    accel_grid = jnp.linspace(-10, 10, 20)
-    steer_grid = jnp.linspace(-0.3, 0.3, 20)
+    accel_grid = np.linspace(-3, 3, 7)
+    steer_grid = np.linspace(-0.4,0.4,5)
     
-    print("Extracting Validation set")
-    # Validation set
-    base_path = '/Data/Dataset/Waymo/V1_2_tf/validation/validation_tfexample.tfrecord@150'
-    output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_extracted/'
-    cache_all_files(base_path, accel_grid, steer_grid, output_path)
+    # print("Extracting Validation set")
+    # # Validation set
+    # base_path = '/Data/Dataset/Waymo/V1_2_tf/validation/validation_tfexample.tfrecord@150'
+    # output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_extracted/'
+    # cache_all_files(base_path, accel_grid, steer_grid, output_path, smooth = True)
     
     print("Extracting Validation Interactive set")
-    base_path='/Data/Dataset/Waymo/V1_2_tf/validation_interactive/validation_interactive_tfexample.tfrecord@150',
+    base_path = '/Data/Dataset/Waymo/V1_2_tf/validation_interactive/validation_interactive_tfexample.tfrecord@150'
     output_path = '/Data/Dataset/Waymo/V1_2_tf/validation_interactive_extracted/'
-    cache_all_files(base_path, accel_grid, steer_grid, output_path)
+    cache_all_files(base_path, accel_grid, steer_grid, output_path, smooth=True)
     
     print("Extracting Training set")
     # Training set
     base_path = '/Data/Dataset/Waymo/V1_2_tf/training/training_tfexample.tfrecord@1000'
     output_path = '/Data/Dataset/Waymo/V1_2_tf/training_extracted/'
-    cache_all_files(base_path, accel_grid, steer_grid, output_path)
+    cache_all_files(base_path, accel_grid, steer_grid, output_path, smooth = True)
     

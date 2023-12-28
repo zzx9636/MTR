@@ -58,7 +58,6 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             output = self.forward_decoder(encoded_state)
          
         actions_sampled = self.motion_decoder.sample(output, False)['sample'].detach().cpu().numpy()
-        
         return self.sample_to_action(actions_sampled, is_controlled)
     
     def encoding_state(self, state: datatypes.SimulatorState, is_controlled: jax.Array = None):
@@ -67,7 +66,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         # update the state
         state.object_metadata.is_modeled = is_controlled
         state.object_metadata.is_controlled = is_controlled
-        input_dict = process_input(state, is_controlled, hide_history=11)
+        input_dict = process_input(state, is_controlled, hide_history=1)
         input_dict_batch = merge_dict([input_dict])
         
         encoded_state = self.forward_encoder(input_dict_batch)

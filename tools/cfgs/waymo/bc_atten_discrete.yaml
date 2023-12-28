@@ -26,10 +26,12 @@ MODEL:
     MOTION_DECODER:
         NAME: BCDecoder
         TYPE: discrete
-        PRED_ALL_LAYERS: True
+        PRED_ALL_LAYERS: False
 
-        HIERARCHICAL_LEVELS: 4 # gird size 4, 8, 16, 32
-        HIERARCHICAL_WEIGHT: [0.4, 0.6, 0.8, 1]
+        HIERARCHICAL_LEVELS: 3 # gird size 4, 8, 16, 32
+        HIERARCHICAL_WEIGHT: [0.6, 0.8, 1]
+
+        ENTROPY_WEIGHT: 0.1
         
         D_MODEL: 256
         NUM_DECODER_LAYERS: 4
@@ -52,4 +54,4 @@ OPTIMIZATION:
 
     LR_WARMUP: 10_000
     LR_GAMMA: 0.9
-    LR_STEP: 10_000
+    LR_STEP: 50_000

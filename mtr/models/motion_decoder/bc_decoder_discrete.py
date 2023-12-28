@@ -25,25 +25,13 @@ class BCDecoder(nn.Module):
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
         self.hierarchical_levels = self.model_cfg.get('HIERARCHICAL_LEVELS', 4)
         self.cost_weight = self.model_cfg.HIERARCHICAL_WEIGHT
+        self.entropy_weight = self.model_cfg.get('ENTROPY_WEIGHT', 0.1)
         self.num_accel_grid = 2**(self.hierarchical_levels+1)
         self.num_steer_grid = 2**(self.hierarchical_levels+1)
         
         self.num_motion_modes = self.num_accel_grid * self.num_steer_grid
         self.pred_all_layers = self.model_cfg.get('PRED_ALL_LAYERS', True)
-        
-        # self.accel_grid = [
-        #     nn.Parameter(
-        #         torch.linspace(-10, 10, 2**(i+1)),
-        #         requires_grad= False
-        #     ) for i in range(self.hierarchical_levels)
-        # ]
-        # self.steer_grid = [
-        #     nn.Parameter(
-        #         torch.linspace(-0.3, 0.3, 2**(i+1)),
-        #         requires_grad= False
-        #     ) for i in range(self.hierarchical_levels)
-        # ]
-            
+                   
         self.accel_embed = nn.Embedding(self.num_accel_grid, self.d_model)
         self.steer_embed = nn.Embedding(self.num_steer_grid, self.d_model)
         
@@ -135,11 +123,12 @@ class BCDecoder(nn.Module):
             print(center_gt)
         for i, pred_logits in enumerate(decoder_dict['pred_list']):  
             layer_loss = 0
-            loss_list = self.hierarchical_cross_entropy(center_gt, pred_logits, debug)  
+            loss_list, negative_entropy = self.hierarchical_cross_entropy(center_gt, pred_logits, debug)  
             for l, loss in enumerate(loss_list):
                 layer_loss += loss * self.cost_weight[l]
                 tb_dict[f'{tb_pre_tag}loss_d{i}_h{l}'] = loss.item()
-            total_loss += layer_loss
+            tb_dict[f'{tb_pre_tag}loss_d{i}_entropy'] = -negative_entropy.item()
+            total_loss += (layer_loss + self.entropy_weight * negative_entropy)
         # Average over layers    
         tb_dict[f'{tb_pre_tag}loss_total'] = total_loss.item()
             
@@ -210,8 +199,11 @@ class BCDecoder(nn.Module):
                 # if l == self.hierarchical_levels - 1:
                 #     plt.colorbar(im, ax=axs[l], shrink=0.2, aspect=20)
                 axs[l].set_title(f'Grid {grid_dim}, loss {loss.item():.3f}', fontsize=8)
+        
+        # Add entropy loss
+        negative_entropy = torch.sum(pred_prob * torch.log(pred_prob + 1e-8), dim=-1).mean()
                 
-        return loss_list
+        return loss_list, negative_entropy
             
     def forward(self, batch_dict):
         # Aggregate features over the history 

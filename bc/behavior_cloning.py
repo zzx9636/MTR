@@ -21,26 +21,26 @@ class BehaviorCloning(pl.LightningModule):
         self.save_hyperparameters(ignore=['logger', 'pretrained_model', 'freeze_pretrained'])
         # Save the config
         self.cfg = cfg
-        self.opt_cfg = cfg.OPTIMIZATION
+        self.opt_cfg = self.cfg.OPTIMIZATION
         self.epoch = 0
         self.freeze_encoder = freeze_encoder
         
         self.encoder = MTREncoder(
-            cfg.MODEL.CONTEXT_ENCODER
+            self.cfg.MODEL.CONTEXT_ENCODER
             )
         
-        if cfg.MODEL.MOTION_DECODER.TYPE == 'bicycle':
+        if self.cfg.MODEL.MOTION_DECODER.TYPE == 'bicycle':
             BCDecoder = BCDecoderBicycle
-        elif cfg.MODEL.MOTION_DECODER.TYPE == 'delta':
+        elif self.cfg.MODEL.MOTION_DECODER.TYPE == 'delta':
             BCDecoder = BCDecoderDelta
-        elif cfg.MODEL.MOTION_DECODER.TYPE == 'discrete':
+        elif self.cfg.MODEL.MOTION_DECODER.TYPE == 'discrete':
             BCDecoder = BCDecoderDiscrete
         else:
-            raise ValueError(f'Unknown motion decoder type: {cfg.MODEL.MOTION_DECODER.TYPE}')
+            raise ValueError(f'Unknown motion decoder type: {self.cfg.MODEL.MOTION_DECODER.TYPE}')
         
         self.decoder = BCDecoder(
             self.encoder.num_out_channels,
-            cfg.MODEL.MOTION_DECODER
+            self.cfg.MODEL.MOTION_DECODER
         )
                 
         if pretrained_model is not None:
@@ -50,10 +50,11 @@ class BehaviorCloning(pl.LightningModule):
         '''
         This function is called by Lightning to create the optimizer and learning rate scheduler.
         '''
-        param2opt = self.decoder.parameters()
+        
         if not self.freeze_encoder:
-            param2opt.extend(self.encoder.parameters())
+            param2opt = self.parameters()
         else:
+            param2opt = self.decoder.parameters()
             # make all parameters in encoder not trainable
             for param in self.encoder.parameters():
                 param.requires_grad = False
@@ -67,10 +68,12 @@ class BehaviorCloning(pl.LightningModule):
 
             if step < warmup_step:
                 # warm up lr
-                lr_scale = 1 - (warmup_step - step)/warmup_step
+                lr_scale = 1 - (warmup_step - step)/warmup_step*0.99
             else:
                 n = (step - warmup_step) // step_size
                 lr_scale = gamma**n
+            if lr_scale < 1e-3:
+                lr_scale = 1e-3
 
             return lr_scale
 

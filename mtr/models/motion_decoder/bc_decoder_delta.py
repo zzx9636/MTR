@@ -25,6 +25,7 @@ class BCDecoder(nn.Module):
         self.dropout = self.model_cfg.get('DROPOUT_OF_ATTN', 0.1)
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
         self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
+        self.pred_all_layers = self.model_cfg.get('PRED_ALL_LAYERS', True)
         
         # Build the query
         self.query = nn.Parameter(
@@ -256,13 +257,14 @@ class BCDecoder(nn.Module):
         
         query_embed = self.pre_query_fusion_layer(torch.cat([center_objects_feature, query_embed], dim=-1))
         
-        # Initialize prediction with out attention
-        prediction = self.prediction_layers[0](query_embed)
-        pred_scores = prediction[..., -1].permute(1, 0).contiguous()
-        pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+        pred_list = []
+        if self.pred_all_layers or self.num_decoder_layers == 0:
+            # Initialize prediction with out attention
+            prediction = self.prediction_layers[0](query_embed)
+            pred_scores = prediction[..., -1].permute(1, 0).contiguous()
+            pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
         
-        pred_list = [(pred_states, pred_scores)]
-        
+            pred_list.append((pred_states, pred_scores))
         
         for i in range(self.num_decoder_layers):
             obj_atten = self.obj_atten_layers[i]
@@ -300,12 +302,11 @@ class BCDecoder(nn.Module):
             # print("temp", temp.std())
             query_embed = temp #+ query_embed
             
-            prediction = pred_layer(query_embed)
-            
-            pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
-            pred_scores = prediction[..., -1].permute(1, 0).contiguous()
-            
-            pred_list.append((pred_states, pred_scores))
+            if self.pred_all_layers or i == (self.num_decoder_layers - 1):   
+                prediction = pred_layer(query_embed)
+                pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+                pred_scores = prediction[..., -1].permute(1, 0).contiguous()
+                pred_list.append((pred_states, pred_scores))
             
         if 'input_dict' in batch_dict:
             input_dict = batch_dict['input_dict']
@@ -334,3 +335,49 @@ class BCDecoder(nn.Module):
                 
         # load the filtered state_dict
         self.load_state_dict(state_dict_filtered, strict=True)
+        
+    def sample(self, output_dict, best = False):
+        """
+        Sample a trajectory from the motion decoder.
+
+        Args:
+            batch_dict (dict): The batch dictionary.
+
+        Returns:
+            output_dict: The batch dictionary with the sampled trajectory added.
+        """
+        pred_ctrls, pred_scores = output_dict['pred_list'][-1]
+        mode, mix, gmm = self.build_gmm_distribution(pred_ctrls, pred_scores)
+        
+        if best:
+            best_idx = torch.argmax(pred_scores, dim=-1)
+            sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :3]
+            sample_action_log_prob = gmm.log_prob(sample)
+            # sample = torch.clamp(sample, -1, 1)
+            sample = sample * self.output_std + self.output_mean
+        else:
+            # Sample from all Gaussian
+            sample_all = mode.rsample() # [Batch, M, 3]
+            sample_all_log_prob = mode.log_prob(sample_all)
+            
+            sample_mode = mix.sample() # [Batch]
+            sample_mode_log_prob = mix.log_prob(sample_mode)
+            
+            sample_action = torch.gather(
+                sample_all, 
+                1, 
+                sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
+            ).squeeze(-2)
+            
+            sample_action_log_prob = torch.gather(
+                sample_all_log_prob, 
+                1, 
+                sample_mode.unsqueeze(-1)
+            ).squeeze(-1)  + sample_mode_log_prob
+            
+            sample = sample_action * self.output_std + self.output_mean
+            
+        return {
+                'sample': sample,
+                'log_prob': sample_action_log_prob
+            }

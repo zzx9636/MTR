@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import IterableDataset
 import pickle
 import os
-from rl_env.env_utils import merge_dict, process_input, compute_inverse
+from rl_env.env_utils import merge_dict, process_input
 from waymax import datatypes
 import numpy as np
 from typing import List
@@ -12,7 +12,8 @@ class BCDataset(IterableDataset):
     def __init__(
         self,
         data_path: str,
-        sample_method: str = 'uniform'
+        sample_method: str = 'log',
+        count_cap: float = None
     ):
         # Get all files in the directory
         self.data_path = data_path
@@ -32,6 +33,7 @@ class BCDataset(IterableDataset):
             self.histogram.append(len(idx_list))
             self.idx_cache[i] = idx_list
         self.histogram = np.asarray(self.histogram)
+        self.histogram = np.clip(self.histogram, 0, count_cap)
         
         if sample_method == 'uniform':
             self.sample_p = self.histogram > 0
@@ -41,10 +43,8 @@ class BCDataset(IterableDataset):
             self.sample_p = self.histogram
         # normalize
         self.sample_p = self.sample_p / self.sample_p.sum()
-        
-        self.compute_inverse_jit = jax.jit(compute_inverse, static_argnums=(3))
-            
-    def retrive_one(self, cache: List, sanity_check: bool = False, hide_history: int = 0):
+                    
+    def retrive_one(self, cache: List, hide_history: int = 1, with_scenario: bool = False):
         """
         Retrieves a single example from the dataset based on the given cache.
 
@@ -66,6 +66,7 @@ class BCDataset(IterableDataset):
         with open(scenario_filename, 'rb') as f:
             scenario_dict = pickle.load(f)
         scenario: datatypes.SimulatorState = scenario_dict['scenario']
+        
         full_action_gt: np.ndarray = scenario_dict['action_gt'] #(T, A, 2)
                 
         is_controlled = np.zeros(32, dtype=bool)
@@ -83,7 +84,10 @@ class BCDataset(IterableDataset):
         input_dict['scenario_id'] = [scenario_id]
         input_dict['t'] = [t_idx]
         
-        return input_dict
+        if with_scenario:
+            return input_dict, scenario
+        else:
+            return input_dict
         
     def collate_fn(self, batch_list):
         input_dict = merge_dict(batch_list)
@@ -97,3 +101,41 @@ class BCDataset(IterableDataset):
             input_dict = self.retrive_one(cache)
             yield input_dict
 
+
+class BCDatasetTester(BCDataset):
+    def __init__(
+        self,
+        data_path: str,
+        count_cap: float = 0.1
+    ) -> None:
+        super().__init__(data_path, count_cap)
+        
+    def __iter__(self):
+        while True:
+
+            bin_idx = np.random.choice(len(self.sample_p), p=self.sample_p)
+            cache_id = np.random.randint(self.histogram[bin_idx])
+            cache = self.idx_cache[bin_idx][cache_id]
+            scenario_idx = cache[0]
+            a_idx = cache[1]
+            t_idx = cache[2]
+            scenario_id = self.scenario_id_list[scenario_idx]
+            
+            scenario_filename = os.path.join(self.data_path, 'scenario_'+scenario_id+'.pkl')
+            
+            # load scenario
+            with open(scenario_filename, 'rb') as f:
+                scenario_dict = pickle.load(f)
+            full_action_gt: np.ndarray = scenario_dict['action_gt'] #(T, A, 2)
+            yield bin_idx, cache, full_action_gt[a_idx, t_idx, :]
+            
+    def collate_fn(self, batch_list):
+        bin_list = []
+        cache_list = []
+        action_list = []
+        for bin_idx, cache, action in batch_list:
+            bin_list.append(bin_idx)
+            cache_list.append(cache)
+            action_list.append(action)
+        return bin_list, cache_list, np.stack(action_list, axis=0)
+        

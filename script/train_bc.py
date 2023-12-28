@@ -35,12 +35,12 @@ def train(
     # Construct Dataset
     train_dataset = BCDataset(
         cfg.DATA.TRAIN_PATH,
-        sample_method = sample_method,
+        # sample_method = sample_method,
     )
     
     val_dataset = BCDataset(
         cfg.DATA.VAL_PATH,
-        sample_method = sample_method,
+        # sample_method = sample_method,
     )
     
     train_loader = DataLoader(
@@ -99,11 +99,11 @@ def train(
 if __name__ == '__main__':
     encoder_state_dict = torch.load('model/checkpoint_epoch_30.pth')['model_state']
     train(
-        # 'tools/cfgs/waymo/bc_atten_ctrl.yaml',
-        'tools/cfgs/waymo/bc_atten_discrete.yaml',
+        'tools/cfgs/waymo/bc_atten_ctrl.yaml',
+        # 'tools/cfgs/waymo/bc_atten_discrete.yaml',
         encoder_state_dict,
         True,
-        'uniform'
+        'raw'
     )
 
          

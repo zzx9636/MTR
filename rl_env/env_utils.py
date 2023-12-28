@@ -7,104 +7,29 @@ import jax.numpy as jnp
 from typing import Dict, List
 import torch
 from waymax import datatypes
-from waymax.utils.geometry import wrap_yaws
+# from waymax.utils.geometry import wrap_yaws
 from functools import partial
 
 from scipy.signal import savgol_filter
 from scipy.interpolate import interp1d
 
-def smooth_scenario(scenario: datatypes.SimulatorState, window_size=51, polyorder=3):
+import copy
+
+def smooth_scenario(scenario: datatypes.SimulatorState, window_size=11, polyorder=3, duplicate=False):
     """
-    Smooths the trajectory of a scenario by applying a Savitzky-Golay filter to the velocity data.
+    Smooths the trajectory of a scenario by applying filtering and interpolation techniques.
 
     Args:
         scenario (datatypes.SimulatorState): The scenario to be smoothed.
-        window_size (int, optional): The size of the window used for the Savitzky-Golay filter. Defaults to 51.
-        polyorder (int, optional): The order of the polynomial used for the Savitzky-Golay filter. Defaults to 3.
-
-    Returns:
-        datatypes.SimulatorState: The smoothed scenario.
-    """
-    traj = scenario.log_trajectory
-    original_valid = np.asarray(traj.valid)
-    vel = np.stack(
-        [traj.vel_x, traj.vel_y, np.sin(traj.yaw), np.cos(traj.yaw)], axis=-1
-    )
-    num_agent, num_step = traj.valid.shape
-    smoothed_vel_x = np.zeros_like(traj.vel_x)
-    smoothed_vel_y = np.zeros_like(traj.vel_y)
-    smoothed_yaw = np.zeros_like(traj.yaw)
-    filtered_valid = np.zeros_like(traj.valid, dtype=bool)
-    t = np.arange(num_step)
-
-    for i in range(num_agent):
-        # Extract raw data and valid mask
-        valid = original_valid[i]
-        t_valid = t[valid]
-        vel_valid = vel[i][valid, :]
-        valid_idx = np.where(valid)[0]
-        
-        if len(valid_idx) == 0: # skip if no valid data
-            continue
-        
-        # Use zscore to filter out outliers
-        std = np.std(vel_valid, axis=-2, keepdims=True) + 1e-5
-        mean = np.mean(vel_valid, axis=-2, keepdims=True)
-        z = np.abs((vel_valid-mean)/std)
-        filtered_idx = np.all(z < 4, axis=-1)
-        valid_idx = valid_idx[filtered_idx]
-        
-        if len(valid_idx) == 0: # skip if no valid data
-            continue
-        
-        first_valid_idx = valid_idx[0]
-        last_valid_idx = valid_idx[-1]
-        if (last_valid_idx - first_valid_idx)<=3:
-            continue
-        # Extract valid velocity data and interpolate
-        t_valid = t[valid_idx]
-
-        vel_valid = vel[i][valid_idx, :]
-        vel_interp = interp1d(t_valid, vel_valid, axis=0, kind='linear')
-
-        t_interped = np.arange(first_valid_idx, last_valid_idx+1)
-        vel_interped = vel_interp(t_interped)
-        
-        # Smooth the interpolated data
-        vel_smoothed = savgol_filter(vel_interped,
-                        min(last_valid_idx-first_valid_idx, window_size),
-                        polyorder,
-                        axis=0
-                        )
-        
-        # update smoothed velocity
-        smoothed_vel_x[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 0]
-        smoothed_vel_y[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 1]
-        smoothed_yaw[i, first_valid_idx:last_valid_idx+1] = np.arctan2(vel_smoothed[:, 2], vel_smoothed[:, 3])
-        filtered_valid[i, first_valid_idx:last_valid_idx+1] = True
-
-    # Update trajectory
-    scenario.log_trajectory.vel_x = smoothed_vel_x
-    scenario.log_trajectory.vel_y = smoothed_vel_y
-    scenario.log_trajectory.yaw = smoothed_yaw
-    scenario.log_trajectory.valid = jnp.logical_and(scenario.log_trajectory.valid, filtered_valid)
-
-    return scenario
-
-def inverse_control(scenario: datatypes.SimulatorState, window_size=51, polyorder=3):
-    """
-    Applies inverse control to the given scenario's log_trajectory.
-
-    Args:
-        scenario (datatypes.SimulatorState): The scenario containing the log_trajectory.
-        window_size (int, optional): The window size for smoothing the interpolated data. Defaults to 51.
+        window_size (int, optional): The size of the window used for smoothing. Defaults to 11.
         polyorder (int, optional): The order of the polynomial used for smoothing. Defaults to 3.
 
     Returns:
-        tuple: A tuple containing the following elements:
-            - action (numpy.ndarray): The estimated control action.
-            - action_valid (numpy.ndarray): A mask indicating the validity of each action.
-    """    
+        the updated scenario.
+    """
+    if duplicate:
+        scenario = copy.deepcopy(scenario)
+    
     traj = scenario.log_trajectory
     original_valid = np.asarray(traj.valid)
     vel = np.stack(
@@ -130,7 +55,8 @@ def inverse_control(scenario: datatypes.SimulatorState, window_size=51, polyorde
             continue
         
         # Use zscore to filter out outliers
-        std = np.std(vel_valid, axis=-2, keepdims=True) + 1e-5
+        std = np.clip(np.std(vel_valid, axis=-2, keepdims=True), a_min = 0.1, a_max=None)
+        
         mean = np.mean(vel_valid, axis=-2, keepdims=True)
         z = np.abs((vel_valid-mean)/std)
         filtered_idx = np.all(z < 4, axis=-1)
@@ -165,95 +91,48 @@ def inverse_control(scenario: datatypes.SimulatorState, window_size=51, polyorde
         smoothed_vel_y[i, first_valid_idx:last_valid_idx+1] = vel_smoothed[:, 1]
         smoothed_yaw[i, first_valid_idx:last_valid_idx+1] = np.arctan2(vel_smoothed[:, 2], vel_smoothed[:, 3])
         smoothed_valid[i, first_valid_idx:last_valid_idx+1] = True
-        
-    smoothed_valid = np.logical_and(smoothed_valid, original_valid)
-    speed = np.sqrt(smoothed_vel_x*smoothed_vel_x + smoothed_vel_y*smoothed_vel_y)
+    
+    # Update Scenario
+    scenario.log_trajectory.vel_x = smoothed_vel_x
+    scenario.log_trajectory.vel_y = smoothed_vel_y
+    scenario.log_trajectory.yaw = smoothed_yaw
+    scenario.log_trajectory.valid = np.logical_and(original_valid, smoothed_valid)
 
+    return scenario
+
+def inverse_unicycle_control(scenario: datatypes.SimulatorState, dt: float = 0.1):
+    """
+    Calculates the inverse control for a given scenario.
+
+    Args:
+        scenario (datatypes.SimulatorState): The simulator state containing the trajectory information.
+        dt (float, optional): The time step. Defaults to 0.1.
+
+    Returns:
+        tuple: A tuple containing the action and action validity arrays.
+    """
+     
+    vel_x = np.asarray(scenario.log_trajectory.vel_x)
+    vel_y = np.asarray(scenario.log_trajectory.vel_y)
+    yaw = np.asarray(scenario.log_trajectory.yaw)
+    valid = np.asarray(scenario.log_trajectory.valid)
+    
     # Estimate control  
-    accel = np.diff(speed, axis=-1) / 0.1
-    delta_yaw = wrap_yaws(np.diff(smoothed_yaw, axis=-1))
-    steering = delta_yaw / np.clip((speed[:, :-1]*0.1+0.5*accel*0.01 +1e-5), 1e-3, None)
-    steering = np.where(speed[...,:-1] > 0.6, steering, 0) 
+    speed = np.sqrt(vel_x*vel_x + vel_y*vel_y)
+    accel = np.diff(speed, axis=-1) / dt
+    
+    delta_yaw = wrap_yaws(np.diff(yaw, axis=-1)) 
+    steering = delta_yaw / dt
 
     # Concat 
     action = np.stack([accel, steering], axis=-1)
-    action_valid = np.logical_and(smoothed_valid[:, 1:], smoothed_valid[:, :-1])
-
+    action_valid = np.logical_and(valid[:, 1:], valid[:, :-1])
+    
     return action, action_valid
 
-@partial(jax.jit, static_argnums=(3,))
-def compute_inverse(
-    traj: datatypes.Trajectory,
-    timestep: jax.typing.ArrayLike,
-    dt: float = 0.1,
-    estimate_yaw_with_velocity: bool = True,
-) -> datatypes.Action:
-    """Runs inverse dynamics model to infer actions for specified timestep.
-
-    Inverse dynamics:
-    accel = (new_vel - vel) / dt
-    steering = (new_yaw - yaw) / (speed * dt + 1/2 * accel * dt ** 2)
-
-    Args:
-    traj: A Trajectory used to infer actions of shape (..., num_objects,
-        num_timesteps).
-    timestep: Index of time for actions.
-    dt: The time step length used in the simulator.
-    estimate_yaw_with_velocity: Whether to use the yaw recorded in `traj` for
-        estimating the inverse action or use the yaw estimated from velocities. It
-        is recommended to set this to True, as using the estimated yaw is
-        generally less noisy than using the yaw directly recorded in the
-        trajectory.
-
-    Returns:
-    An Action that converts traj[timestep] to traj[timestep+1] of shape
-        (..., num_objects, dim=2).
-    """
-    _SPEED_LIMIT = 0.6
-    xy_yaw_vel = jnp.stack(
-        [traj.x, traj.y, traj.yaw, traj.vel_x, traj.vel_y], axis=-1
-    )
-    xy_yaw_vel_slice = jax.lax.dynamic_slice_in_dim(
-        xy_yaw_vel, start_index=timestep, slice_size=2, axis=-2
-    )
-    # Each has shape (..., num_timesteps = 2, 1).
-    _, _, yaw, vel_x, vel_y = jnp.split(xy_yaw_vel_slice, 5, axis=-1)
-    valids = jax.lax.dynamic_slice_in_dim(
-        traj.valid, start_index=timestep, slice_size=2, axis=-1
-    )
-    valid = valids[..., 0:1] & valids[..., 1:2]
-    # Calculate acceleration.
-    speed = jnp.sqrt(vel_x[..., 0:2, :] ** 2 + vel_y[..., 0:2, :] ** 2)
-    new_speed = speed[..., 1:2, :]
-    accel = (new_speed - speed[..., 0:1, :]) / dt
-
-    # Calculate steering curvature.
-    new_yaw = geometry.wrap_yaws(yaw[..., 1:2, :])
-    yaw = geometry.wrap_yaws(yaw[..., 0:1, :])
-    if estimate_yaw_with_velocity:
-        real_yaw = jnp.arctan2(vel_y[..., 0:1, :], vel_x[..., 0:1, :])
-        real_new_yaw = jnp.arctan2(vel_y[..., 1:2, :], vel_x[..., 1:2, :])
-    else:
-        real_yaw = yaw
-        real_new_yaw = new_yaw
-    real_yaw = jnp.where(
-        jnp.abs(speed[..., 0:1, :]) <= _SPEED_LIMIT, yaw, real_yaw
-    )
-    real_new_yaw = jnp.where(
-        jnp.abs(new_speed) <= _SPEED_LIMIT, new_yaw, real_new_yaw
-    )
-    delta_yaw = geometry.wrap_yaws(real_new_yaw - real_yaw)
-    steering = delta_yaw / (speed[..., 0:1, :] * dt + 0.5 * accel * dt**2)
-    # Set steering to 0.0 if speed is 0 to avoid NaN error.
-    # When speed is small, delta_yaw sometimes can also be small, so the
-    # calculation of steering is affected by the data noise and can lead to
-    # overestimation of steering, filtering small speed can help to prevent
-    # overestimation of steering.
-    steering = jnp.where(jnp.abs(speed[..., 0:1, :]) < _SPEED_LIMIT, 0, steering)
-    steering = jnp.where(jnp.abs(speed[..., 1:2, :]) < _SPEED_LIMIT, 0, steering)
-    raw_action_array = jnp.concatenate([accel, steering], axis=-1).squeeze(-2)
-    action_array = jnp.where(valid, raw_action_array, 0.0)
-    return datatypes.Action(data=action_array, valid=valid)
+def wrap_yaws(yaws: np.ndarray) -> np.ndarray:
+    """Wraps yaw angles between pi and -pi radians."""
+    return (yaws + np.pi) % (2 * np.pi) - np.pi
 
 def merge_dict(batch_list: List, device: torch.device = 'cpu') -> Dict[str, torch.Tensor]:
     """Collects a batch of data from a list of transitions.
@@ -344,17 +223,20 @@ def process_input(
         timestamps=timestamps,
         obj_types=obj_types,
     )
-    
+       
     # Remove non seeing history
-    # print(obj_trajs_data.shape, len(track_index_to_predict))
     if hide_history > 0:
         visible_history = hide_history  
     else:
         visible_history = np.random.randint(11)+1
+    # original = obj_trajs_data.copy()
     obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history, :] = 0.0
     obj_trajs_mask[np.arange(len(track_index_to_predict)), track_index_to_predict, :-visible_history] = False
-        
+    obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, -visible_history, -2:] \
+        = obj_trajs_data[np.arange(len(track_index_to_predict)), track_index_to_predict, -visible_history, -4:-2]/0.1
+    
     polylines = _stack_map(scenario.roadgraph_points)
+    # print(obj_trajs_data[0, :, 0, 0])
     
     # Extract the map information
     # (num_center_objects, num_topk_polylines, num_points_each_polyline, 9),
@@ -465,7 +347,7 @@ def generate_centered_trajs_for_agents(
     # assert center_objects.shape[-1] == 10
     num_center_objects = center_objects.shape[0]
     num_objects, num_timestamps, _ = obj_trajs_past.shape
-    
+        
     # transform the coordinate systems to each centered objects
     # [num_center_objects, num_objects, num_timestamps, num_attrs]
     obj_trajs = transform_trajs_to_center_coords(
@@ -497,13 +379,12 @@ def generate_centered_trajs_for_agents(
     acce = (vel - vel_pre) / 0.1  # (num_centered_objects, num_objects, num_timestamps, 2)
     acce[:, :, 0, :] = acce[:, :, 1, :]
     
-    acce_val = obj_trajs[:, :, :, -1]  # (num_centered_objects, num_objects, num_timestamps)
-    acce_val_pre = np.roll(acce_val, shift=1, axis=2)
-    acce_val = np.logical_and(acce_val, acce_val_pre)
-    acce_val[:, :, 0] = acce_val[:, :, 1]
-    acce[~acce_val] = 0 # remove invalid acce
+    # acce_val = obj_trajs[:, :, :, -1]  # (num_centered_objects, num_objects, num_timestamps)
+    # acce_val_pre = np.roll(acce_val, shift=1, axis=2)
+    # acce_val = np.logical_and(acce_val, acce_val_pre)
+    # acce_val[:, :, 0] = acce_val[:, :, 1]
+    # acce[~acce_val] = 0 # remove invalid acce
     
-
     ret_obj_trajs = np.concatenate((
         obj_trajs[:, :, :, 0:6], 
         object_onehot_mask,

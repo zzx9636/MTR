@@ -26,6 +26,7 @@ class BCDecoder(nn.Module):
         self.num_decoder_layers = self.model_cfg.NUM_DECODER_LAYERS
         self.loss_mode = self.model_cfg.get('LOSS_MODE', 'best')
         self.pred_all_layers = self.model_cfg.get('PRED_ALL_LAYERS', True)
+        self.cls_weight = self.model_cfg.get('CLS_WEIGHT', 1.0)
         
         # Build the query
         self.query = nn.Parameter(
@@ -84,7 +85,7 @@ class BCDecoder(nn.Module):
             
         
         # Prediction Head
-        output_dim = 6
+        output_dim = 5
             
         self.prediction_layers = nn.ModuleList([ResidualMLP(
                 c_in = self.d_model,
@@ -93,11 +94,18 @@ class BCDecoder(nn.Module):
                 without_norm = True       
             ) for _ in range(self.num_decoder_layers+1)])
         
-        self.register_buffer('output_mean', torch.tensor([0.0, 0.0]))
-        self.register_buffer('output_std', torch.tensor([3.5, 0.17]))
+        self.score_layers = nn.ModuleList([ResidualMLP(
+                c_in = self.d_model,
+                c_out = 1,
+                num_mlp = 4,
+                without_norm = True       
+            ) for _ in range(self.num_decoder_layers+1)])
+        
+        self.register_buffer('output_mean', torch.tensor([0.22, 0.02]))  
+        self.register_buffer('output_std', torch.tensor([0.9, 0.157]))
             
     def build_mode_distribution(self, pred_ctrl, log_std_range=(-5.0, 2.0), rho_limit=0.4):
-        independent = pred_ctrl.shape[-1] == 5
+        # independent = pred_ctrl.shape[-1] == 5
     
         mean = pred_ctrl[..., 0:2] # (num_center_objects, num_query, 2)
                 
@@ -107,10 +115,11 @@ class BCDecoder(nn.Module):
         std1 = std[..., 0]
         std2 = std[..., 1]
 
-        if independent:
-            rho = torch.zeros_like(std1)
-        else:
-            rho = torch.clip(pred_ctrl[..., 4], min=-rho_limit, max=rho_limit) # 1&2
+        # if independent:
+        #     rho = torch.zeros_like(std1)
+        # else:
+        # rho = torch.zeros_like(std1)
+        rho = torch.clip(pred_ctrl[..., 4], min=-rho_limit, max=rho_limit) # 1&2
             
         covariance = torch.stack([
             torch.stack([std1**2, rho*std1*std2], dim=-1),
@@ -132,7 +141,7 @@ class BCDecoder(nn.Module):
         else:
             return self.get_loss_gmm(decoder_dict, tb_pre_tag)
 
-    def get_loss_best(self, decoder_dict, tb_pre_tag='', filter = True, debug = False):
+    def get_loss_best(self, decoder_dict, tb_pre_tag='', filter = False, debug = False):
         tb_dict = {}
         
         center_gt_unnormalized = decoder_dict['gt_action'][...,None,:].cuda()
@@ -146,21 +155,25 @@ class BCDecoder(nn.Module):
             nll_loss_all = -mode_all.log_prob(center_gt)            
             nll_loss_best, best_idx = nll_loss_all.min(dim=-1)
             if debug and i == len(decoder_dict['pred_list']) - 1:
-                print(pred_states)
-                print(nll_loss_all)
-                print(best_idx, pred_scores)  
+                print('Prediction', pred_states)
+                print('nll', nll_loss_all)
+                print('score', best_idx, pred_scores)  
             
             # Filter out the noise prediction
             if filter:
-                nll_loss_valid = (torch.abs(center_gt.squeeze(1)) < 4).all(dim=1) # filter out gt with large value
+                nll_loss_valid = (torch.abs(center_gt.squeeze(1)) < 10).all(dim=1) # filter out gt with large value
                 nll_loss_best = nll_loss_best[nll_loss_valid]
                 best_idx = best_idx[nll_loss_valid]
                 pred_scores = pred_scores[nll_loss_valid]
                 # tb_dict[f'{tb_pre_tag}layer{i}_num_invalid'] = torch.sum(~nll_loss_valid).float().item()
+            # L1 Loss of the best mode
+            best_mode = pred_states[torch.arange(pred_states.shape[0]), best_idx, :2]
+            l1_loss = torch.abs(best_mode - center_gt.squeeze(1)).sum(dim=-1)
+            cls_loss = F.cross_entropy(input=pred_scores, target=best_idx.detach(), reduction='none')
 
-            cls_loss = F.cross_entropy(input  = pred_scores, target= best_idx, reduction='none')
-
-            layer_loss = (nll_loss_best + cls_loss).mean()
+            layer_loss = (nll_loss_best + l1_loss + self.cls_weight*cls_loss).mean()
+            
+            tb_dict[f'{tb_pre_tag}layer{i}_loss_l1'] = l1_loss.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss_nll'] = nll_loss_best.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss_cls'] = cls_loss.mean().item()
             tb_dict[f'{tb_pre_tag}layer{i}_loss'] = layer_loss.item()
@@ -270,8 +283,9 @@ class BCDecoder(nn.Module):
         if self.pred_all_layers or self.num_decoder_layers == 0:
             # Initialize prediction with out attention
             prediction = self.prediction_layers[0](query_embed)
-            pred_scores = prediction[..., -1].permute(1, 0).contiguous()
-            pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
+            score = self.score_layers[0](query_embed)
+            pred_scores = score.squeeze(-1).permute(1, 0).contiguous()
+            pred_states = prediction.permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 5)
             
             pred_list.append((pred_states, pred_scores))
             
@@ -281,6 +295,7 @@ class BCDecoder(nn.Module):
             map_atten = self.map_atten_layers[i]
             query_fuison = self.query_fusion_layers[i]
             pred_layer = self.prediction_layers[i+1]
+            score_layer = self.score_layers[i+1]
             
             obj_query_embed = obj_atten(
                 tgt = query_embed,
@@ -310,13 +325,12 @@ class BCDecoder(nn.Module):
                     ], dim=-1)) 
             
             # print("temp", temp.std())
-            query_embed = temp #+ query_embed
-            if self.pred_all_layers or self.num_decoder_layers == (self.num_decoder_layers - 1):
+            query_embed = temp + query_embed
+            if self.pred_all_layers or i == (self.num_decoder_layers - 1):
                 prediction = pred_layer(query_embed)
-                
-                pred_states = prediction[..., :-1].permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 9)
-                pred_scores = prediction[..., -1].permute(1, 0).contiguous()
-                
+                score = score_layer(query_embed)
+                pred_scores = score.squeeze(-1).permute(1, 0).contiguous()
+                pred_states = prediction.permute(1, 0, 2).contiguous() # (num_center_objects, num_motion_modes, 5)
                 pred_list.append((pred_states, pred_scores))
                 
         batch_dict['pred_list'] = pred_list
