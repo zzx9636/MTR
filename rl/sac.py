@@ -9,7 +9,7 @@
 """A class for basic soft actor-critic.
 """
 
-from typing import Optional, Union, Tuple, Dict
+from typing import Tuple, Dict
 import os
 import torch
 import copy
@@ -20,7 +20,8 @@ import matplotlib.pyplot as plt
 import wandb
 import time
 from rl_env.waymax_env import MultiAgentEnvironment
-from rl_env.env_utils import action_to_waymax_action, WomdLoader
+from rl_env.waymax_util import sample_to_action, WomdLoader
+from rl_env.env_utils import smooth_scenario, inverse_unicycle_control
 
 from rl.encoder import Encoder
 from rl.actor import Actor
@@ -50,6 +51,7 @@ class SAC():
     self.opt_period = int(cfg.OPT_PERIOD)  # Optimizes actors/critics every `opt_period` steps.
     self.num_updates_per_opt = int(cfg.NUM_UPDATES)  # The number of updates per optimization.
     self.eval_period = int(cfg.EVAL_PERIOD)  # Evaluates actors/critics every `eval_period` steps.
+    self.eval_episodes = int(cfg.EVAL_EPISODES)  # The number of episodes for evaluation.
     self.actor_update_period = int(cfg.ACTOR_UPDATE_PERIOD)  # Updates actor every `actor_update_period` steps.
     self.soft_update_period = int(cfg.SOFT_UPDATE_PERIOD)  # Updates critic target every `soft_update_period` steps.
     self.soft_tau = float(cfg.SOFT_UPDATE_TAU)  # Soft update coefficient for the target network.
@@ -76,8 +78,6 @@ class SAC():
     # Environment
     self.train_data_iter = train_data_iter
     self.val_data_iter = val_data_iter
-    print("get length of val data iter, takes a while")
-    self.val_data_iter.len()
     self.env = env
 
     # Actor and Critic
@@ -98,8 +98,7 @@ class SAC():
     obsrv_all = None
     
     self.eval()
-    
-
+    return None
     for i in tqdm(range(self.max_steps)):
       self.cnt_step = i
       self.cnt_opt_period += 1
@@ -131,11 +130,17 @@ class SAC():
     if obs_cur is None:
       # sample a new episode
       scenario_id, scenario = self.train_data_iter.next()
+      scenario = smooth_scenario(scenario)
+      # Get the GT action
+      gt_action, gt_action_valid = inverse_unicycle_control(scenario)
+      # Reset the environment
       cur_state = self.env.reset(scenario)
+      # Find the controlled agents
+      is_controlled = self.encoder.is_controlled_func(cur_state)
+      # Encode the state
       with torch.no_grad():
-        cur_encoded_state, is_controlled = self.encoder(cur_state, None)
+        cur_encoded_state, is_controlled = self.encoder(cur_state, is_controlled)
       scenario_id = [scenario_id] * is_controlled.sum().item()
-      
     else:
       scenario_id = obs_cur['scenario_id']
       cur_state = obs_cur['cur_state']
@@ -149,7 +154,7 @@ class SAC():
       cur_action = self.actor.sample(decoder_ouput)['sample'].detach().cpu().numpy()
       
     # 3. Convert to action
-    waymax_action = action_to_waymax_action(cur_action, is_controlled)
+    waymax_action = sample_to_action(cur_action, is_controlled)
     
     # 4. Step the waymax environment
     next_state = self.env.step_sim_agent(cur_state, [waymax_action])
@@ -170,24 +175,19 @@ class SAC():
       # (num_agent,) # Distance to off-road area, off-road when negative
       rewards['offroad'] = np.asanyarray(-metrics['offroad'].value[is_controlled]) 
       has_offroad = np.any(rewards['offroad'] <= 0)
-      
-    has_infeasible_kinematics = False
-    if 'kinematics' in metrics.keys():
-      # (num_agent,) # Kinematics infeasibility when value is negative
-      rewards['kinematics'] = np.asarray(-metrics['kinematics'].value[is_controlled]) 
-      has_infeasible_kinematics = np.any(rewards['kinematics'] <= 0)
-    
+          
     g_x = np.minimum(rewards['overlap'], rewards['offroad'])
-    # g_x = np.minimum(g_x, rewards['kinematics'])
       
     # 6. Get the next observation  
     with torch.no_grad():
-      next_encoded_state, is_controlled = self.encoder(next_state, is_controlled)
+      is_controlled_next = self.encoder.is_controlled_func(next_state)
+      next_encoded_state, _ = self.encoder(next_state, is_controlled_next)
 
     # 7. Check if the episode is done
-    is_done = has_collision or has_offroad or has_infeasible_kinematics or next_state.remaining_timesteps.item() <= 0 
+    is_done = has_collision or has_offroad or next_state.remaining_timesteps.item() <= 0 
     n_agent = cur_action.shape[0]
     is_done_array = torch.ones(n_agent, dtype=torch.bool) * is_done
+    
     # 8. create record
     record = {
       'scenario_id': scenario_id,
@@ -197,7 +197,7 @@ class SAC():
       'g_x': to_device(g_x, 'cpu', detach=True), # (num_agent,)
       'next_encoded_state': to_device(next_encoded_state, 'cpu', detach=True), # Dict
       'is_done': to_device(is_done_array, 'cpu', detach=True), # (num_agent,)
-      # 'is_controlled': to_device(is_controlled, 'cpu', detach=True)
+      'is_controlled': to_device(is_controlled_next, 'cpu', detach=True)
     }
     
     # 9. save the record to the memory
@@ -372,26 +372,24 @@ class SAC():
     
     self.encoder.eval()
     self.actor.eval()
-    num_val = self.val_data_iter.len()
     
     cur_figure_folder = os.path.join(self.figure_folder, f"step_{self.cnt_step}")
     os.makedirs(cur_figure_folder, exist_ok=True)
     
-    for i, (scenario_id, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=num_val):
-      if i >= 100:
+    for i, (scenario_id, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=self.eval_episodes):
+      if i >= self.eval_episodes:
         break
       cur_state = self.env.reset(scenario)
       cur_encoded_state, is_controlled = self.encoder(cur_state, None)
       while True:
-        with torch.no_grad():      
-          
+        with torch.no_grad():
           # 1. Run a forward pass of the decoder to get action
           decoder_ouput = self.actor(cur_encoded_state)
           # 2. Sample Action  
           cur_action = self.actor.sample(decoder_ouput)['sample'].detach().cpu().numpy()
           
         # 3. Convert to action
-        waymax_action = action_to_waymax_action(cur_action, is_controlled)
+        waymax_action = sample_to_action(cur_action, is_controlled)
         
         # 4. Step the waymax environment
         next_state = self.env.step_sim_agent(cur_state, [waymax_action])
@@ -402,21 +400,15 @@ class SAC():
         has_collision = False
         if 'overlap' in metrics.keys():
           #(num_agent,) # Min Distance to other agents
-          overlap = np.asarray(metrics['overlap'].value[is_controlled].min(axis = -1))
+          overlap = np.asarray(metrics['overlap'].value)[is_controlled].min(axis = -1)
           has_collision = np.any(overlap <= 0)
           
         has_offroad = False
         if 'offroad' in metrics.keys():
           # (num_agent,) # Distance to off-road area, off-road when negative
-          offroad = np.asanyarray(-metrics['offroad'].value[is_controlled]) 
+          offroad = np.asarray(-metrics['offroad'].value)[is_controlled]
           has_offroad = np.any(offroad <= 0)
-          
-        has_infeasible_kinematics = False
-        if 'kinematics' in metrics.keys():
-          # (num_agent,) # Kinematics infeasibility when value is negative
-          kinematics = np.asarray(-metrics['kinematics'].value[is_controlled]) 
-          has_infeasible_kinematics = np.any(kinematics <= 0)
-        
+                  
         done = False
         if has_collision:
           count_collision += 1
@@ -425,9 +417,6 @@ class SAC():
         if has_offroad:
           count_offroad += 1
           done = True
-        
-        # if has_infeasible_kinematics:
-        #   break
         
         if next_state.remaining_timesteps.item() <= 0:
           count_success += 1
@@ -449,7 +438,8 @@ class SAC():
           break
         else:
           with torch.no_grad():
-            cur_encoded_state, is_controlled = self.encoder(next_state, is_controlled)
+            is_controlled = self.encoder.is_controlled_func(next_state)
+            cur_encoded_state, _ = self.encoder(next_state, is_controlled)
             cur_state = next_state
 
     eval_result = {

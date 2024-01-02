@@ -28,6 +28,8 @@ class BCDecoder(nn.Module):
         self.entropy_weight = self.model_cfg.get('ENTROPY_WEIGHT', 0.1)
         self.num_accel_grid = 2**(self.hierarchical_levels+1)
         self.num_steer_grid = 2**(self.hierarchical_levels+1)
+        self.max_accel = self.model_cfg.get('MAX_ACCEL', 8)
+        self.max_steer = self.model_cfg.get('MAX_STEER', 0.8)
         
         self.num_motion_modes = self.num_accel_grid * self.num_steer_grid
         self.pred_all_layers = self.model_cfg.get('PRED_ALL_LAYERS', True)
@@ -160,8 +162,8 @@ class BCDecoder(nn.Module):
             accel = center_gt[:, 0].contiguous()    
             steer = center_gt[:, 1].contiguous()
             grid_dim = 2**(l+2)
-            accel_grid = torch.linspace(-10, 10, grid_dim+1, device=center_gt.device)
-            steer_grid = torch.linspace(-0.3, 0.3, grid_dim+1, device=center_gt.device)
+            accel_grid = torch.linspace(-self.max_accel, self.max_accel, grid_dim+1, device=center_gt.device)
+            steer_grid = torch.linspace(-self.max_steer, self.max_steer, grid_dim+1, device=center_gt.device)
 
             accel_idx = torch.searchsorted(accel_grid[1:-1], accel)
             steer_idx = torch.searchsorted(steer_grid[1:-1], steer)
@@ -193,7 +195,7 @@ class BCDecoder(nn.Module):
                 axs[l].set_xlabel('steer')
                 if l == 0:
                     axs[l].set_ylabel('accel')
-                axs[l].set_aspect(0.3/10)
+                axs[l].set_aspect(self.max_steer/self.max_accel)
                 # mark ground truth
                 axs[l].scatter(center_gt[:, 1].detach().cpu().numpy(), center_gt[:, 0].detach().cpu().numpy(), c='r', s=10, marker='x')
                 # if l == self.hierarchical_levels - 1:
@@ -260,7 +262,7 @@ class BCDecoder(nn.Module):
         query_embed = self.pre_query_fusion_layer(torch.cat([center_objects_feature, query_embed], dim=-1))
         
         pred_list = []
-        if self.pred_all_layers:
+        if self.pred_all_layers or self.num_decoder_layers == 0:
             # Initialize prediction with out attention
             prediction = self.prediction_layers[0](query_embed).permute(1, 0, 2).squeeze(-1).contiguous() # (num_center_objects, num_query, 1)
             pred_list.append(prediction)
@@ -332,8 +334,8 @@ class BCDecoder(nn.Module):
         
         
         grid_dim = 2**(self.hierarchical_levels+1)
-        accel_grid = torch.linspace(-10, 10, grid_dim+1, device=pred_logits.device)
-        steer_grid = torch.linspace(-0.3, 0.3, grid_dim+1, device=pred_logits.device)
+        accel_grid = torch.linspace(-self.max_accel, self.max_accel, grid_dim+1, device=pred_logits.device)
+        steer_grid = torch.linspace(-self.max_steer, self.max_steer, grid_dim+1, device=pred_logits.device)
         
         # choose the action
         if best:

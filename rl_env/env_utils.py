@@ -7,9 +7,7 @@ import jax.numpy as jnp
 from typing import Dict, List
 import torch
 from waymax import datatypes
-# from waymax.utils.geometry import wrap_yaws
-from functools import partial
-
+from waymax.agents import actor_core
 from scipy.signal import savgol_filter
 from scipy.interpolate import interp1d
 
@@ -258,7 +256,7 @@ def process_input(
     }
     
     return ret_dict
-            
+
 #################### Utils ####################
 def _stack_traj(traj: datatypes.Trajectory) -> np.ndarray:
     """Stacks a trajectory into a 10D array."""

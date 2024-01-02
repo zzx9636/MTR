@@ -28,10 +28,12 @@ MODEL:
         TYPE: discrete
         PRED_ALL_LAYERS: False
 
-        HIERARCHICAL_LEVELS: 3 # gird size 4, 8, 16, 32
+        HIERARCHICAL_LEVELS: 3 # gird size 4, 8, 16
         HIERARCHICAL_WEIGHT: [0.6, 0.8, 1]
+        MAX_ACCEL: 8.0
+        MAX_STEER: 0.8
 
-        ENTROPY_WEIGHT: 0.1
+        ENTROPY_WEIGHT: 1
         
         D_MODEL: 256
         NUM_DECODER_LAYERS: 4
@@ -45,7 +47,7 @@ MODEL:
 
 OPTIMIZATION:
     BATCH_SIZE_PER_GPU: 32
-    MAX_STEPS: 1_000_000
+    MAX_STEPS: 500_000
     VAL_CHECK_INTERVAL: 5_000
     LIMIT_VAL_BATCHES: 500
 

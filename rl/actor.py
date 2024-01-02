@@ -143,7 +143,6 @@ class Actor(nn.Module):
 
     return q_pi.sum().item(), log_prob.sum().item(), loss_alpha.sum().item()
 
-
   def forward(self, encoder_dict: Dict) -> Dict:
     """
     Forward pass through the motion decoder.
@@ -172,75 +171,77 @@ class Actor(nn.Module):
     mode, mix, gmm = self.actor_network.build_gmm_distribution(pred_ctrls, pred_scores)
     return mode, mix, gmm
   
-  def sample(self, output_dict):
-    """
-    Sample a trajectory from the motion decoder.
+  def sample(self, output_dict: Dict, best = False):
+    return self.actor_network.sample(output_dict, best)
+  # def sample(self, output_dict):
+  #   """
+  #   Sample a trajectory from the motion decoder.
 
-    Args:
-        batch_dict (dict): The batch dictionary.
+  #   Args:
+  #       batch_dict (dict): The batch dictionary.
 
-    Returns:
-        output_dict: The batch dictionary with the sampled trajectory added.
-    """
-    mode, mix, gmm = self.construct_distribution(output_dict)
+  #   Returns:
+  #       output_dict: The batch dictionary with the sampled trajectory added.
+  #   """
+  #   mode, mix, gmm = self.construct_distribution(output_dict)
     
-    # sample_action = gmm.sample()
-    mode: torch.distributions.MultivariateNormal
-    mix: torch.distributions.Categorical
+  #   # sample_action = gmm.sample()
+  #   mode: torch.distributions.MultivariateNormal
+  #   mix: torch.distributions.Categorical
     
-    # Sample from all Gaussian
-    sample_all = mode.rsample() # [Batch, M, 3]
-    sample_all_log_prob = mode.log_prob(sample_all)
+  #   # Sample from all Gaussian
+  #   sample_all = mode.rsample() # [Batch, M, 3]
+  #   sample_all_log_prob = mode.log_prob(sample_all)
     
-    sample_mode = mix.sample() # [Batch]
-    sample_mode_log_prob = mix.log_prob(sample_mode)
+  #   sample_mode = mix.sample() # [Batch]
+  #   sample_mode_log_prob = mix.log_prob(sample_mode)
     
-    sample_action = torch.gather(
-        sample_all, 
-        1, 
-        sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
-    ).squeeze(-2)
+  #   sample_action = torch.gather(
+  #       sample_all, 
+  #       1, 
+  #       sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
+  #   ).squeeze(-2)
     
-    sample_action_log_prob = torch.gather(
-        sample_all_log_prob, 
-        1, 
-        sample_mode.unsqueeze(-1)
-    ).squeeze(-1)  + sample_mode_log_prob
+  #   sample_action_log_prob = torch.gather(
+  #       sample_all_log_prob, 
+  #       1, 
+  #       sample_mode.unsqueeze(-1)
+  #   ).squeeze(-1)  + sample_mode_log_prob
                 
-    sample = sample_action * self.actor_network.output_std + self.actor_network.output_mean
+  #   sample = sample_action * self.actor_network.output_std + self.actor_network.output_mean
     
-    sample_dict = {
-        'sample': sample,
-        'log_prob': sample_action_log_prob
-    }
+  #   sample_dict = {
+  #       'sample': sample,
+  #       'log_prob': sample_action_log_prob
+  #   }
         
-    return sample_dict
+  #   return sample_dict
 
-  def sample_best(self, output_dict):
-      """
-      Sample a trajectory from the motion decoder.
+  # def sample_best(self, output_dict):
+  #     """
+  #     Sample a trajectory from the motion decoder.
 
-      Args:
-          batch_dict (dict): The batch dictionary.
+  #     Args:
+  #         batch_dict (dict): The batch dictionary.
 
-      Returns:
-          output_dict: The batch dictionary with the sampled trajectory added.
-      """
+  #     Returns:
+  #         output_dict: The batch dictionary with the sampled trajectory added.
+  #     """
   
-      cur_decoder = self.actor_network
+  #     cur_decoder = self.actor_network
       
-      pred_ctrls, pred_scores = output_dict['pred_list'][-1]
+  #     pred_ctrls, pred_scores = output_dict['pred_list'][-1]
       
-      best_idx = torch.argmax(pred_scores, dim=-1)
+  #     best_idx = torch.argmax(pred_scores, dim=-1)
       
-      # take value from the best index
-      sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :3]
+  #     # take value from the best index
+  #     sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :3]
       
-      sample = sample * cur_decoder.output_std + cur_decoder.output_mean
+  #     sample = sample * cur_decoder.output_std + cur_decoder.output_mean
       
-      sample_dict = {'sample': sample}
+  #     sample_dict = {'sample': sample}
       
-      return sample_dict
+  #     return sample_dict
 
   def to(self, device):
     super().to(device)

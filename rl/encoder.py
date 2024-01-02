@@ -44,8 +44,8 @@ class Encoder(nn.Module):
         # update the state
         state.object_metadata.is_modeled = is_controlled
         state.object_metadata.is_controlled = is_controlled
-        input_dict = process_input(state, is_controlled)
-        input_dict_batch = encoder_collate_batch([input_dict])
+        input_dict = process_input(state, is_controlled, hide_history=1)
+        input_dict_batch = merge_dict([input_dict])
         
         encoded_state = self.context_encoder(input_dict_batch, retain_input = False)
         

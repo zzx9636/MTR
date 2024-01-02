@@ -75,18 +75,6 @@ class BaseTraining(ABC):
     # TODO: Determine where to put collect_batch
     return collect_batch(list_batch, self.device)
 
-  # @abstractmethod
-  # def sample(self, obsrv_all: torch.Tensor) -> Union[np.ndarray, List[Dict[str, np.ndarray]]]:
-  #   """Samples actions given the current observations.
-
-  #   Args:
-  #       obsrv_all (torch.Tensor): current observaions of all environments.
-
-  #   Returns:
-  #       np.ndarray or List[Dict[str, np.ndarray]]: actions to execute.
-  #   """
-  #   raise NotImplementedError
-
   @abstractmethod
   def interact(
       self, obsrv_all: Optional[dict[str, torch.Tensor]],

@@ -6,6 +6,7 @@ from waymax.agents import actor_core
 
 from rl_env.env_utils import merge_dict
 from rl_env.env_utils import process_input
+from rl_env.waymax_util import sample_to_action
 
 import numpy as np
 import os
@@ -58,7 +59,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             output = self.forward_decoder(encoded_state)
          
         actions_sampled = self.motion_decoder.sample(output, False)['sample'].detach().cpu().numpy()
-        return self.sample_to_action(actions_sampled, is_controlled)
+        return sample_to_action(actions_sampled, is_controlled)
     
     def encoding_state(self, state: datatypes.SimulatorState, is_controlled: jax.Array = None):
         if is_controlled is None:
@@ -72,22 +73,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
         encoded_state = self.forward_encoder(input_dict_batch)
         
         return encoded_state, is_controlled
-        
-    def sample_to_action(self, sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
-        """Converts a sample to an waymax action."""
-        
-        actions_array = np.zeros((is_controlled.shape[0], sample.shape[-1]))
-        actions_array[is_controlled] = sample
-        actions_valid = jnp.asarray(is_controlled[...,None])
-        
-        actions = datatypes.Action(data=jnp.asarray(actions_array), valid=actions_valid)
-        
-        return actor_core.WaymaxActorOutput(
-            action=actions,
-            actor_state=None,
-            is_controlled=is_controlled,
-        )
-           
+                   
     @property
     def name(self) -> str:
         return 'mtr'

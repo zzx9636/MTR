@@ -125,7 +125,7 @@ class InvertibleUnicycleModel(DynamicsModel):
       self,
       dt: float = 0.1,
       max_accel: float = 6.0,
-      max_steering: float = 1.0,
+      max_steering: float = 0.6,
       normalize_actions: bool = False,
   ):
     """Initializes the bounds of the action space.

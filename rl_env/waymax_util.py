@@ -54,7 +54,6 @@ def create_iter(data_config: waymax_config.DatasetConfig)-> iter(Tuple[str, data
 class WomdLoader:
     def __init__(self, data_config: waymax_config.DatasetConfig) -> None:
         self.data_config = data_config
-        self.length = None
         self.reset()
         
     def reset(self):
@@ -63,16 +62,10 @@ class WomdLoader:
     def next(self):
         return next(self.iter)
     
-    def len(self):
-        if self.length is None:
-            self.length = sum(1 for _ in self.iter)
-            self.reset()
-        else:
-            return self.length
-    
-def action_to_waymax_action(sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
+def sample_to_action(sample: np.ndarray, is_controlled: jax.Array)->datatypes.Action:
     """Converts a action [dx, dy, dyaw] to an waymax action."""
-    actions_array = np.zeros((is_controlled.shape[0], 3))
+    action_dim = sample.shape[-1]
+    actions_array = np.zeros((is_controlled.shape[0], action_dim))
     actions_array[is_controlled] = sample
     actions_valid = jnp.asarray(is_controlled[...,None])
     

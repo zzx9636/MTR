@@ -21,10 +21,10 @@ MODEL:
 
     MOTION_DECODER:
         NAME: BCDecoder
-        TYPE: bicycle
-        PRED_ALL_LAYERS: False
 
-        NUM_FUTURE_FRAMES: 80
+        # OBJECT_TYPE: *object_type 
+        # CENTER_OFFSET_OF_MAP: *center_offset
+
         NUM_MOTION_MODES: 6
 
         D_MODEL: 256
@@ -32,16 +32,21 @@ MODEL:
         NUM_ATTN_HEAD: 8
         MAP_D_MODEL: 256
         DROPOUT_OF_ATTN: 0.1 
-        CLS_WEIGHT: 0.1
 
         NUM_BASE_MAP_POLYLINES: 256
         NUM_WAYPOINT_MAP_POLYLINES: 128
 
         LOSS_MODE: 'best'
+        USE_BICYCLE_MODEL: False
     
     Q_DECODER:
         NAME: Qecoder
+
+        # OBJECT_TYPE: *object_type 
+        # CENTER_OFFSET_OF_MAP: *center_offset
+
         NUM_Q_MODES: 2
+
         D_MODEL: 256
         NUM_DECODER_LAYERS: 1
         NUM_ATTN_HEAD: 8
@@ -50,7 +55,8 @@ MODEL:
 
         NUM_BASE_MAP_POLYLINES: 256
         NUM_WAYPOINT_MAP_POLYLINES: 128
-        
+
+
 SAC:
     ACTOR:
         ACTOR_TYPE: 'max'
@@ -95,7 +101,6 @@ SAC:
         NUM_UPDATES: 100
         BATCH_SIZE: 8
         EVAL_PERIOD: 10_000
-        EVAL_EPISODES: 100
         ACTOR_UPDATE_PERIOD: 1    
         SOFT_UPDATE_PERIOD: 1
         SOFT_UPDATE_TAU: 0.005
