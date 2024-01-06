@@ -41,9 +41,10 @@ MODEL:
     
     Q_DECODER:
         NAME: Qecoder
+        D_ACTION: 2
         NUM_Q_MODES: 2
         D_MODEL: 256
-        NUM_DECODER_LAYERS: 1
+        NUM_DECODER_LAYERS: 4
         NUM_ATTN_HEAD: 8
         MAP_D_MODEL: 256
         DROPOUT_OF_ATTN: 0.1 
@@ -61,15 +62,15 @@ SAC:
         LR_GAMMA: 0.5
         LR_END: 0.000001
 
-        # Alpha for entropy regularization
-        ENTROPY_REG: True
+        # Alpha for KL regularization
+        KL_REG: True
         UPDATE_ALPHA: True
         LOG_ALPHA_INIT: 0
         ALPHA_LR: 0.0001
         ALPHA_LR_PERIOD: 100000
         ALPHA_LR_DECAY: 0.5
         ALPHA_LR_END: 0.000001
-        TARGET_ENTROPY: -2.0
+        TARGET_KL: 0
     
     CRITIC:
         MODE: 'safety'
@@ -80,8 +81,8 @@ SAC:
         LR_GAMMA: 0.5
         LR_END: 0.000001
 
-        # Alpha for entropy regularization
-        ENTROPY_REG: True
+        # Alpha for KL regularization
+        KL_REG: True
         UPDATE_GAMMA: True
         GAMMA: 0.99
         GAMMA_PERIOD: 100000
@@ -90,14 +91,14 @@ SAC:
 
     RL:
         MAX_STEPS: 1_000_000
-        OPT_PERIOD: 100
-        MIN_STEP_BEFORE_TRAIN: 100
-        NUM_UPDATES: 100
+        OPT_PERIOD: 500
+        MIN_STEP_BEFORE_TRAIN: 1000
+        NUM_UPDATES: 200
         BATCH_SIZE: 8
-        EVAL_PERIOD: 10_000
+        EVAL_PERIOD: 1_000
         EVAL_EPISODES: 100
-        ACTOR_UPDATE_PERIOD: 1    
-        SOFT_UPDATE_PERIOD: 1
+        ACTOR_UPDATE_PERIOD: 10    
+        SOFT_UPDATE_PERIOD: 100
         SOFT_UPDATE_TAU: 0.005
         MEMORY_SIZE: 10_000
         OUT_DIR: 'output/rl_finetune'

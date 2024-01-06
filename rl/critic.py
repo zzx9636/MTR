@@ -26,7 +26,7 @@ class Critic(nn.Module):
     self.cfg = cfg
     self.mode = cfg.MODE # 'performance' or 'safety' or 'reach-avoid' or 'risk'
     self.update_gamma = cfg.UPDATE_GAMMA
-    self.entropy_reg = cfg.ENTROPY_REG
+    self.kl_reg = cfg.KL_REG
     
     self.q_network = q_network
     
@@ -65,8 +65,8 @@ class Critic(nn.Module):
       init_value=cfg.GAMMA, 
       period=cfg.GAMMA_PERIOD,
       decay=cfg.GAMMA_DECAY, 
-      end_value=cfg.GAMMA_END,
-      goal_value=1.
+      goal_value=cfg.GAMMA_END,
+      end_value=None,
     )
         
   def update_hyper_param(self):
@@ -106,7 +106,7 @@ class Critic(nn.Module):
       g_x: torch.Tensor, 
       l_x: torch.Tensor,
       binary_cost: torch.Tensor, 
-      entropy_motives: torch.Tensor
+      kl_motives: torch.Tensor
   ) -> float:
     """Updates critic network with next Q values (target).
 
@@ -120,7 +120,7 @@ class Critic(nn.Module):
         g_x (torch.Tensor):
         l_x (torch.Tensor):
         binary_cost (torch.Tensor):
-        entropy_motives (torch.Tensor):
+        kl_motives (torch.Tensor):
 
     Returns:
         float: critic loss.
@@ -136,18 +136,18 @@ class Critic(nn.Module):
       binary_cost=binary_cost
     )
     
-    
-    if self.entropy_reg:
-      y += (1.0-done)*self.gamma * entropy_motives
-
+    if self.kl_reg:
+      y += (1.0-done)*self.gamma * kl_motives
     # Repeat y
     y = y.unsqueeze(-1).repeat(1, q.shape[-1])
     # Regresses MSE loss for both Q1 and Q2.
     loss = mse_loss(input=q, target=y, reduction='none')
-    
+    # print(y)
+    # print(q)
     # Backpropagates.
     self.optimizer.zero_grad()
     loss.mean().backward()
+    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
     self.optimizer.step()
     return loss.sum().item()
   
@@ -189,16 +189,18 @@ class Critic(nn.Module):
       raise ValueError("Unsupported RL mode.")
     
     if self.mode == 'reach-avoid':
+      gamma = self.gamma * (1-done)
       # V(s) = min{ g(s), max{ l(s), V(s') }}
       # Q(s, u) = V( f(s,u) ) = main g(s'), max{ ell(s'), min_{u'} Q(s', u')}}
       terminal_target = torch.min(l_x, g_x)
       original_target = torch.min(g_x, torch.max(l_x, target_q))
-      y = (1.0-self.gamma) * terminal_target + self.gamma*original_target * (1-done)
+      y = (1.0-gamma) * terminal_target + gamma*original_target 
     elif self.mode == 'safety':
+      gamma = self.gamma * (1-done)
       # V(s) = min{ g(s), V(s') }
       # Q(s, u) = V( f(s,u) ) = min{ g(s'), max_{u'} Q(s', u') }
       # normal state
-      y = ((1.0-self.gamma) * g_x + self.gamma * torch.min(g_x, target_q)) * (1-done)
+      y = (1.0-gamma) * g_x + gamma*torch.min(g_x, target_q) 
     elif self.mode == 'performance':
       y = reward + self.gamma * target_q * (1-done)
     elif self.mode == 'risk':

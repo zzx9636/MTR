@@ -23,10 +23,10 @@ class Actor(nn.Module):
     
     self.cfg = cfg
     self.actor_type = cfg.ACTOR_TYPE # 'min' or 'max'
-    self.entropy_reg = cfg.ENTROPY_REG
+    self.kl_reg = cfg.KL_REG
     self.update_alpha = cfg.UPDATE_ALPHA
     
-    # Load Network and Entropy Coefficient
+    # Load Network and kl Coefficient
     self.actor_network = actor_network
     self.actor_network.to(device)
     
@@ -37,8 +37,8 @@ class Actor(nn.Module):
       device=device
     )
     
-    self.target_entropy = torch.tensor(
-      [cfg.TARGET_ENTROPY],
+    self.target_kl = torch.tensor(
+      [cfg.TARGET_KL],
       dtype=torch.float32,
       device=device
     )
@@ -96,18 +96,17 @@ class Actor(nn.Module):
 
   def update(self, 
         q: torch.Tensor,
-        log_prob: torch.Tensor,
+        kl_div: torch.Tensor,
       ) -> Tuple[float, float, float]:
     """
     Update the actor network based on the given Q-values, log probabilities, and alpha value.
 
     Args:
       q1 (torch.Tensor): The Q-values from the first critic network.
-      q2 (torch.Tensor): The Q-values from the second critic network.
       log_prob (torch.Tensor): The log probabilities of the actions taken by the actor network.
 
     Returns:
-      Tuple[float, float, float]: A tuple containing the loss values for Q evaluation, entropy, and alpha.
+      Tuple[float, float, float]: A tuple containing the loss values for Q evaluation, kl, and alpha.
 
     """
     # Update Actor
@@ -116,32 +115,37 @@ class Actor(nn.Module):
     elif self.actor_type == 'max':
       q_pi = torch.min(q, dim=-1)[0]
       
-    if self.entropy_reg:
-      loss_entropy = self.alpha * log_prob.view(-1).mean()
+    if self.kl_reg:
+      loss_kl = self.alpha * kl_div.view(-1).mean()
     else:
-      loss_entropy = 0.0
+      loss_kl = 0.0
       
     if self.actor_type == 'min':
       loss_q_eval = q_pi.mean()
     elif self.actor_type == 'max':
       loss_q_eval = -q_pi.mean()
-
-    loss_pi = loss_q_eval + loss_entropy
+    # print('loss_q_eval', loss_q_eval)
+    # print('loss_kl', loss_kl)
+    loss_pi = loss_q_eval + loss_kl
     
     self.optimizer.zero_grad()
     loss_pi.backward()
+    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
     self.optimizer.step()
 
     # Update Alpha
-    if self.entropy_reg and self.update_alpha:
-      loss_alpha = (self.alpha * (-log_prob.detach() - self.target_entropy))
+    if self.kl_reg and self.update_alpha:
+      loss_alpha = (self.alpha * (-kl_div.detach() - self.target_kl))
       self.alpha_optimizer.zero_grad()
       loss_alpha.mean().backward()
+      torch.nn.utils.clip_grad_norm_(self.parameters(), 0.5)
       self.alpha_optimizer.step()
       #TODO: Do we need to clip alpha?
       # self.log_alpha.data = torch.min(self.log_alpha.data, self.init_alpha.data)
+    else:
+      loss_alpha = 0.0 * loss_q_eval
 
-    return q_pi.sum().item(), log_prob.sum().item(), loss_alpha.sum().item()
+    return q_pi.sum().item(), kl_div.sum().item(), loss_alpha.sum().item()
 
   def forward(self, encoder_dict: Dict) -> Dict:
     """
@@ -173,80 +177,11 @@ class Actor(nn.Module):
   
   def sample(self, output_dict: Dict, best = False):
     return self.actor_network.sample(output_dict, best)
-  # def sample(self, output_dict):
-  #   """
-  #   Sample a trajectory from the motion decoder.
-
-  #   Args:
-  #       batch_dict (dict): The batch dictionary.
-
-  #   Returns:
-  #       output_dict: The batch dictionary with the sampled trajectory added.
-  #   """
-  #   mode, mix, gmm = self.construct_distribution(output_dict)
-    
-  #   # sample_action = gmm.sample()
-  #   mode: torch.distributions.MultivariateNormal
-  #   mix: torch.distributions.Categorical
-    
-  #   # Sample from all Gaussian
-  #   sample_all = mode.rsample() # [Batch, M, 3]
-  #   sample_all_log_prob = mode.log_prob(sample_all)
-    
-  #   sample_mode = mix.sample() # [Batch]
-  #   sample_mode_log_prob = mix.log_prob(sample_mode)
-    
-  #   sample_action = torch.gather(
-  #       sample_all, 
-  #       1, 
-  #       sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
-  #   ).squeeze(-2)
-    
-  #   sample_action_log_prob = torch.gather(
-  #       sample_all_log_prob, 
-  #       1, 
-  #       sample_mode.unsqueeze(-1)
-  #   ).squeeze(-1)  + sample_mode_log_prob
-                
-  #   sample = sample_action * self.actor_network.output_std + self.actor_network.output_mean
-    
-  #   sample_dict = {
-  #       'sample': sample,
-  #       'log_prob': sample_action_log_prob
-  #   }
-        
-  #   return sample_dict
-
-  # def sample_best(self, output_dict):
-  #     """
-  #     Sample a trajectory from the motion decoder.
-
-  #     Args:
-  #         batch_dict (dict): The batch dictionary.
-
-  #     Returns:
-  #         output_dict: The batch dictionary with the sampled trajectory added.
-  #     """
   
-  #     cur_decoder = self.actor_network
-      
-  #     pred_ctrls, pred_scores = output_dict['pred_list'][-1]
-      
-  #     best_idx = torch.argmax(pred_scores, dim=-1)
-      
-  #     # take value from the best index
-  #     sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :3]
-      
-  #     sample = sample * cur_decoder.output_std + cur_decoder.output_mean
-      
-  #     sample_dict = {'sample': sample}
-      
-  #     return sample_dict
-
   def to(self, device):
     super().to(device)
     self.log_alpha = self.log_alpha.to(device)
-    self.target_entropy = self.target_entropy.to(device)
+    self.target_kl = self.target_kl.to(device)
     return self
 
 

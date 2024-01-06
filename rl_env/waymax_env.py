@@ -22,8 +22,6 @@ from waymax.env import typedefs as types
 
 from rl_env.env_utils import process_input, merge_dict
 from rl_env.rewards.ReachAvoidMetrics import ReachAvoidMetrics
-from tools.mtr_lightning import MTR_Lightning
-import tensorflow as tf
  
 class MultiAgentEnvironment(waymax_env.BaseEnvironment):
     def __init__(
@@ -54,6 +52,7 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
         # Useful jited functions 
         self.jit_step = jit(self.step)
         self.jit_gt_action = jit(self.gt_actor.select_action)
+        self.jit_reset = jit(super().reset)
         
     def step_sim_agent(
         self,
@@ -93,6 +92,20 @@ class MultiAgentEnvironment(waymax_env.BaseEnvironment):
         Compute the metrics for the current state and action
         '''
         return self._reward_function.compute(state)
+    
+    def reset(self, state: datatypes.SimulatorState) -> datatypes.SimulatorState:
+        """Initializes the simulation state.
+
+        This initializer sets the initial timestep and fills the initial simulation
+        trajectory with invalid values.
+
+        Args:
+        state: An uninitialized state of shape (...).
+
+        Returns:
+        The initialized simulation state of shape (...).
+        """
+        return self.jit_reset(state)
     
     
                 

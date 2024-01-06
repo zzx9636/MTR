@@ -19,6 +19,7 @@ class QDecoder(nn.Module):
     def __init__(self, in_channels, config):
         super().__init__()
         self.model_cfg = config
+        self.d_action = self.model_cfg.D_ACTION
         self.num_q_modes = self.model_cfg.NUM_Q_MODES
         self.d_model = self.model_cfg.D_MODEL
         self.n_head = self.model_cfg.NUM_ATTN_HEAD
@@ -51,7 +52,7 @@ class QDecoder(nn.Module):
         )
         
         self.in_proj_action = nn.Sequential(
-            nn.Linear(3, self.d_model),
+            nn.Linear(self.d_action, self.d_model),
             nn.ReLU(),
             nn.Linear(self.d_model, self.d_model),
             nn.ReLU(),
@@ -109,7 +110,7 @@ class QDecoder(nn.Module):
         
         num_center_objects, num_objects, _ = obj_feature.shape
         
-        assert action.shape == (num_center_objects, 3), "action shape is {}".format(action.shape)
+        assert action.shape == (num_center_objects, self.d_action), "action shape is {}".format(action.shape)
         
         center_objects_feature = obj_feature[torch.arange(num_center_objects), track_index_to_predict]
         

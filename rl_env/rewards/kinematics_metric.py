@@ -52,7 +52,8 @@ class KinematicsFeasibilityMetric(abstract_metric.AbstractMetric):
 
   @jax.named_scope('KinematicsInfeasibilityMetric.compute')
   def compute(
-      self, simulator_state: datatypes.SimulatorState
+      self, simulator_state: datatypes.SimulatorState,
+      scale: float = 1.0
   ) -> abstract_metric.MetricResult:
     """Computes the kinematics feasibility metric.
 
@@ -76,11 +77,11 @@ class KinematicsFeasibilityMetric(abstract_metric.AbstractMetric):
         current step does not violate the kinematic infeasibility metrics.
     """
     return self.compute_kinematics_infeasibility(
-        simulator_state.sim_trajectory, simulator_state.timestep
+        simulator_state.sim_trajectory, simulator_state.timestep, scale
     )
 
   def compute_kinematics_infeasibility(
-      self, traj: datatypes.Trajectory, timestep: jax.Array
+      self, traj: datatypes.Trajectory, timestep: jax.Array, scale: float = 1.0
   ) -> abstract_metric.MetricResult:
     """Computes the kinematics infeasibility metric.
 
@@ -107,5 +108,5 @@ class KinematicsFeasibilityMetric(abstract_metric.AbstractMetric):
     kim_infeasibility = jnp.maximum(accel_infeasibility, steering_infeasibility)
     
     return abstract_metric.MetricResult.create_and_validate(
-        kim_infeasibility, actions.valid[..., 0]
+        kim_infeasibility*scale, actions.valid[..., 0]
     )

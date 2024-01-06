@@ -35,12 +35,12 @@ def train(
     # Construct Dataset
     train_dataset = BCDataset(
         cfg.DATA.TRAIN_PATH,
-        # sample_method = sample_method,
+        sample_method = sample_method,
     )
     
     val_dataset = BCDataset(
         cfg.DATA.VAL_PATH,
-        # sample_method = sample_method,
+        sample_method = sample_method,
     )
     
     train_loader = DataLoader(
@@ -65,17 +65,18 @@ def train(
     num_decoder = cfg.MODEL.MOTION_DECODER.NUM_DECODER_LAYERS
     freeze_str = 'freeze' if freeze_pretrained else 'unfreeze'
     
-    model = BehaviorCloning(cfg, pretrained_encoder, freeze_pretrained)
+    # model = BehaviorCloning(cfg, pretrained_encoder, freeze_pretrained)
+    model = BehaviorCloning.load_from_checkpoint(
+        'output/bc_discrete_4_freeze_2/epoch=0-step=920000.ckpt',
+    )
     
     logger = WandbLogger(project=f'MTR_BC_{decoder_type}', entity='zzx9636', log_model=True)
     logger.watch(model, log_freq=500)
     
-    
-    
     trainer = pl.Trainer(
         max_steps=cfg.OPTIMIZATION.MAX_STEPS,
-        val_check_interval=cfg.OPTIMIZATION.VAL_CHECK_INTERVAL,
-        limit_val_batches = cfg.OPTIMIZATION.LIMIT_VAL_BATCHES,
+        # val_check_interval=cfg.OPTIMIZATION.VAL_CHECK_INTERVAL,
+        # limit_val_batches = cfg.OPTIMIZATION.LIMIT_VAL_BATCHES,
         accelerator="gpu",
         enable_progress_bar=True, 
         logger=logger, 
@@ -83,23 +84,31 @@ def train(
         gradient_clip_val=0.5, 
         gradient_clip_algorithm="value",
         callbacks=[
+            # ModelCheckpoint(
+            #     dirpath = f'output/bc_{decoder_type}_{num_decoder}_{freeze_str}',
+            #     save_top_k=100,
+            #     save_weights_only = True,
+            #     monitor='val/loss_total', 
+            #     every_n_epochs = 1,
+            #     save_on_train_epoch_end=False,
+            # ),
             ModelCheckpoint(
                 dirpath = f'output/bc_{decoder_type}_{num_decoder}_{freeze_str}',
                 save_top_k=100,
                 save_weights_only = True,
-                monitor='val/loss_total', 
-                every_n_epochs = 1,
-                save_on_train_epoch_end=False,
+                monitor='train/loss_total', 
+                every_n_train_steps = 10000,
+                # save_on_train_epoch_end=False,
             ),
             LearningRateMonitor(logging_interval='step')
         ]
     )
-    trainer.fit(model, train_loader, val_loader)
+    trainer.fit(model, train_loader)#, val_loader)
     
 if __name__ == '__main__':
     encoder_state_dict = torch.load('model/checkpoint_epoch_30.pth')['model_state']
     train(
-        # 'tools/cfgs/waymo/bc_atten_ctrl.yaml',
+        # 'tools/cfgs/waymo/bc_atten_ctrl_full.yaml',
         'tools/cfgs/waymo/bc_atten_discrete.yaml',
         encoder_state_dict,
         True,

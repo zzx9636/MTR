@@ -302,7 +302,7 @@ class BCDecoder(nn.Module):
                     ], dim=-1)) 
             
             # print("temp", temp.std())
-            query_embed = temp #+ query_embed
+            query_embed = temp + query_embed
             
             if self.pred_all_layers or i == (self.num_decoder_layers - 1):
                 prediction = pred_layer(query_embed).permute(1, 0, 2).squeeze(-1).contiguous() # (num_center_objects, num_query, 1)        

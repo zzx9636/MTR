@@ -70,6 +70,9 @@ class SAC():
     os.makedirs(self.model_folder, exist_ok=True)
     self.figure_folder = os.path.join(self.out_folder, 'figure')
     os.makedirs(self.figure_folder, exist_ok=True)
+    self.interact_figure_folder = os.path.join(self.out_folder, 'interact_figure')
+    os.makedirs(self.interact_figure_folder, exist_ok=True)
+    
     self.use_wandb = bool(cfg.USE_WANDB)
     if self.use_wandb:
       # initialize wandb
@@ -97,23 +100,61 @@ class SAC():
     start_learning = time.time()
     obsrv_all = None
     
-    self.eval()
-    return None
     for i in tqdm(range(self.max_steps)):
       self.cnt_step = i
       self.cnt_opt_period += 1
       # Interacts with the env and sample transitions.
+      
       obsrv_all = self.interact(obsrv_all)
 
       # Optimizes actor and critic.
       self.update()
       
       self.eval()
-
+      
     end_learning = time.time()
     time_learning = end_learning - start_learning
     print('\nLearning: {:.1f}'.format(time_learning))
-
+  
+  def get_ref_log_prob(self, encoded_state, sample):
+    self.ref_actor.eval()
+    with torch.no_grad():
+      ref_decoder_output = self.ref_actor(encoded_state)
+    
+    # Construct the reference distribution
+    _, _, ref_gmm = self.ref_actor.construct_distribution(ref_decoder_output)
+    
+    sample_normailzed = (sample - self.ref_actor.output_mean) / self.ref_actor.output_std
+    
+    ref_log_prob = ref_gmm.log_prob(sample_normailzed)
+    
+    return ref_log_prob
+    
+  def get_reward(self, state, waymax_action, is_controlled):
+    # 5. Run metrics Function
+    metrics = self.env.metrics(state, waymax_action)
+    
+    # Generate Rewards
+    rewards = {}
+    has_collision = False
+    if 'overlap' in metrics.keys():
+      #(num_agent,) # Min Distance to other agents
+      rewards['overlap'] = np.asarray(metrics['overlap'].value)[is_controlled].min(axis = -1)
+      has_collision = np.any(rewards['overlap'] <= 0)
+      
+    has_offroad = False
+    if 'offroad' in metrics.keys():
+      # (num_agent,) # Distance to off-road area, off-road when negative
+      rewards['offroad'] = np.asarray(metrics['offroad'].value)[is_controlled]
+      has_offroad = np.any(rewards['offroad'] <= 0)
+          
+    g_x = np.minimum(rewards['overlap'], rewards['offroad'])
+    g_x_scale = -np.exp(-g_x)
+    g_x = np.where(g_x <= 0,
+                   g_x_scale,
+                   g_x)
+    return rewards, g_x, has_collision, has_offroad
+    
   def interact(self, obs_cur: dict[str, torch.Tensor] = None):
     """
     Interacts with the environment by taking a step based on the current state.
@@ -130,29 +171,38 @@ class SAC():
     if obs_cur is None:
       # sample a new episode
       scenario_id, scenario = self.train_data_iter.next()
-      scenario = smooth_scenario(scenario)
+      # scenario = smooth_scenario(scenario)
       # Get the GT action
-      gt_action, gt_action_valid = inverse_unicycle_control(scenario)
+      # gt_action, gt_action_valid = inverse_unicycle_control(scenario)
       # Reset the environment
       cur_state = self.env.reset(scenario)
       # Find the controlled agents
       is_controlled = self.encoder.is_controlled_func(cur_state)
+      
+      # check if it is a valid scenario
+      _, g_x, has_collision, has_offroad = self.get_reward(cur_state, None, is_controlled)
+      if has_collision or has_offroad:
+        # filename = os.path.join(self.interact_figure_folder, f"{self.cnt_step}.png")
+        # title = f"Step {cur_state.timestep.item()}, Offroad {has_offroad}, Collision {has_collision}, g_x {g_x}"
+        # self.plot_eposide(cur_state, filename, title, True)
+        return None
       # Encode the state
       with torch.no_grad():
         cur_encoded_state, is_controlled = self.encoder(cur_state, is_controlled)
       scenario_id = [scenario_id] * is_controlled.sum().item()
+      # use_gt_action = self.rng.random() < 0.9
     else:
       scenario_id = obs_cur['scenario_id']
       cur_state = obs_cur['cur_state']
       cur_encoded_state = obs_cur['cur_encoded_state']
       is_controlled = obs_cur['is_controlled']
+      # use_gt_action = self.rng.random(is_controlled.sum().item()) < 0.5 * 
           
     with torch.no_grad():      
       # 1. Run a forward pass of the decoder to get action
-      decoder_ouput = self.actor(cur_encoded_state)
+      decoder_output = self.actor(cur_encoded_state)
       # 2. Sample Action  
-      cur_action = self.actor.sample(decoder_ouput)['sample'].detach().cpu().numpy()
-      
+      cur_action = self.actor.sample(decoder_output)['sample'].detach().cpu().numpy()
     # 3. Convert to action
     waymax_action = sample_to_action(cur_action, is_controlled)
     
@@ -160,23 +210,8 @@ class SAC():
     next_state = self.env.step_sim_agent(cur_state, [waymax_action])
     
     # 5. Run metrics Function
-    metrics = self.env.metrics(next_state, waymax_action)
-    
-    # Generate Rewards
-    rewards = {}
-    has_collision = False
-    if 'overlap' in metrics.keys():
-      #(num_agent,) # Min Distance to other agents
-      rewards['overlap'] = np.asarray(metrics['overlap'].value[is_controlled].min(axis = -1))
-      has_collision = np.any(rewards['overlap'] <= 0)
-      
-    has_offroad = False
-    if 'offroad' in metrics.keys():
-      # (num_agent,) # Distance to off-road area, off-road when negative
-      rewards['offroad'] = np.asanyarray(-metrics['offroad'].value[is_controlled]) 
-      has_offroad = np.any(rewards['offroad'] <= 0)
-          
-    g_x = np.minimum(rewards['overlap'], rewards['offroad'])
+    rewards, g_x, has_collision, has_offroad = \
+      self.get_reward(next_state, waymax_action, is_controlled)
       
     # 6. Get the next observation  
     with torch.no_grad():
@@ -193,11 +228,15 @@ class SAC():
       'scenario_id': scenario_id,
       'cur_encoded_state': to_device(cur_encoded_state, 'cpu', detach=True),
       'cur_action': to_device(cur_action, 'cpu', detach=True),
+      'is_controlled': to_device(is_controlled, 'cpu', detach=True), # (num_agent,)
+      
+      # Roll out information      
       'rewards': to_device(rewards, 'cpu', detach=True), # Dict
       'g_x': to_device(g_x, 'cpu', detach=True), # (num_agent,)
-      'next_encoded_state': to_device(next_encoded_state, 'cpu', detach=True), # Dict
       'is_done': to_device(is_done_array, 'cpu', detach=True), # (num_agent,)
-      'is_controlled': to_device(is_controlled_next, 'cpu', detach=True)
+
+      # carry over the next state
+      'next_encoded_state': to_device(next_encoded_state, 'cpu', detach=True), # Dict
     }
     
     # 9. save the record to the memory
@@ -206,12 +245,15 @@ class SAC():
     # 10. return the next observation
     if is_done:
       obs_next = None
+      filename = os.path.join(self.interact_figure_folder, f"{self.cnt_step}.png")
+      title = f"Step {cur_state.timestep.item()}, Offroad {has_offroad}, Collision {has_collision}, g_x {g_x}"
+      self.plot_eposide(cur_state, filename, title, False)
     else:
       obs_next = {
         'scenario_id': scenario_id,
         'cur_state': next_state,
         'cur_encoded_state': next_encoded_state,
-        'is_controlled': is_controlled,
+        'is_controlled': is_controlled_next,
       }
     
     return obs_next
@@ -236,20 +278,18 @@ class SAC():
     self.critic.eval()
     
     # 1. Run a forward pass of the decoder to get action
-    decoder_ouput = self.actor(cur_encoded_state)
-    
-    # 2. Run a forward pass of the reference actor to get reference action distribution
-    # with torch.no_grad():
-    #   ref_decoder_output = self.ref_actor(cur_encoded_state)
-    
-    # ref_mode, ref_mix, ref_gmm = self.ref_actor.construct_distribution(ref_decoder_output)
-    
-    # 3. TODO: Compute the KL divergence
-    
-    # 4. Sample Action  
-    sample = self.actor.sample(decoder_ouput)
+    decoder_output = self.actor(cur_encoded_state)
+        
+    # 2. Sample Action  
+    sample = self.actor.sample(decoder_output)
     sampled_action = sample['sample']
     log_prob = sample['log_prob']
+    
+    # 3. Compute the reference log prob
+    ref_log_prob = self.get_ref_log_prob(cur_encoded_state, sampled_action)
+    
+    # 4. KL divergence
+    kl_div = (log_prob - ref_log_prob)
     
     batch_size = sampled_action.shape[0]
     
@@ -257,7 +297,7 @@ class SAC():
     q = self.critic(cur_encoded_state, sampled_action)
     
     # 4. update the actor
-    loss_pi, loss_ent, loss_alpha = self.actor.update(q=q, log_prob=log_prob)
+    loss_pi, loss_ent, loss_alpha = self.actor.update(q=q, log_prob=kl_div)
     
     return loss_pi, loss_ent, loss_alpha, batch_size
     
@@ -278,10 +318,10 @@ class SAC():
     # sample next_action from the actor
     with torch.no_grad():      
       # 1. Run a forward pass of the decoder to get action
-      decoder_ouput = self.actor(next_encoded_state)
+      decoder_output = self.actor(next_encoded_state)
       
       # 2. Sample Action  
-      sample = self.actor.sample(decoder_ouput)
+      sample = self.actor.sample(decoder_output)
       
       next_action = sample['sample'].detach()
       next_log_prob = sample['log_prob'].detach()
@@ -291,7 +331,7 @@ class SAC():
       
       # 3. Compute the target Q value
       q_next = self.critic_target(next_encoded_state, next_action)
-    
+      
     # 4. Compute the estimated Q value
     q = self.critic(cur_encoded_state, cur_action)  # Gets Q(s, a).
 
@@ -337,7 +377,7 @@ class SAC():
           
         # do soft update of the critic target network
         if timer % self.soft_update_period == 0:
-          self.critic_target.soft_update(self.critic, self.soft_tau)
+          self.critic.soft_update(self.critic_target, self.soft_tau)
         
       loss_q_mean = np.sum(loss_q_all)/critic_count
       loss_pi_mean = np.sum(loss_pi_all)/actor_count
@@ -360,7 +400,7 @@ class SAC():
         print(log_dict)
  
   def eval(self):
-    if self.cnt_step % self.eval_period != 0:
+    if (self.cnt_step % self.eval_period) != 0:
       return
     print('Evaluating the model at sample step {}'.format(self.cnt_step))
     self.val_data_iter.reset()
@@ -376,17 +416,23 @@ class SAC():
     cur_figure_folder = os.path.join(self.figure_folder, f"step_{self.cnt_step}")
     os.makedirs(cur_figure_folder, exist_ok=True)
     
-    for i, (scenario_id, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=self.eval_episodes):
+    # for i, (scenario_id, scenario) in tqdm(enumerate(self.val_data_iter.iter), total=self.eval_episodes, leave=False):
+    for i, (scenario_id, scenario) in enumerate(self.val_data_iter.iter):
       if i >= self.eval_episodes:
         break
       cur_state = self.env.reset(scenario)
-      cur_encoded_state, is_controlled = self.encoder(cur_state, None)
+      is_controlled = self.encoder.is_controlled_func(cur_state)
+      _, _, has_collision, has_offroad = self.get_reward(cur_state, None, is_controlled)
+      if has_collision or has_offroad:
+        continue
+      with torch.no_grad():
+        cur_encoded_state, is_controlled = self.encoder(cur_state, None)
       while True:
         with torch.no_grad():
           # 1. Run a forward pass of the decoder to get action
-          decoder_ouput = self.actor(cur_encoded_state)
+          decoder_output = self.actor(cur_encoded_state)
           # 2. Sample Action  
-          cur_action = self.actor.sample(decoder_ouput)['sample'].detach().cpu().numpy()
+          cur_action = self.actor.sample(decoder_output)['sample'].detach().cpu().numpy()
           
         # 3. Convert to action
         waymax_action = sample_to_action(cur_action, is_controlled)
@@ -394,21 +440,9 @@ class SAC():
         # 4. Step the waymax environment
         next_state = self.env.step_sim_agent(cur_state, [waymax_action])
         
-        # 5. Run metrics Function
-        metrics = self.env.metrics(next_state, waymax_action)
+        # # 5. Run metrics Function
+        _, _, has_collision, has_offroad = self.get_reward(next_state, waymax_action, is_controlled)
         
-        has_collision = False
-        if 'overlap' in metrics.keys():
-          #(num_agent,) # Min Distance to other agents
-          overlap = np.asarray(metrics['overlap'].value)[is_controlled].min(axis = -1)
-          has_collision = np.any(overlap <= 0)
-          
-        has_offroad = False
-        if 'offroad' in metrics.keys():
-          # (num_agent,) # Distance to off-road area, off-road when negative
-          offroad = np.asarray(-metrics['offroad'].value)[is_controlled]
-          has_offroad = np.any(offroad <= 0)
-                  
         done = False
         if has_collision:
           count_collision += 1
@@ -424,17 +458,9 @@ class SAC():
           
         if done:
           eposide_length.append(next_state.timestep.item())
-          # visualize 
-          img = visualization.plot_simulator_state(
-            next_state, use_log_traj=False, 
-            highlight_obj = waymax_config.ObjectType.MODELED
-          )
-          plt.imshow(img)
-          plt.axis('off')
-          plt.title(f"Scenario {scenario_id}, Step {next_state.timestep.item()}, Offroad {has_offroad}, Collision {has_collision}")
-          plt.savefig(os.path.join(cur_figure_folder, f"scenario_{scenario_id}.png"), 
-                    bbox_inches='tight', pad_inches=0, dpi=300)
-          plt.close()
+          title = f"Scenario {scenario_id}, Step {next_state.timestep.item()}, Offroad {has_offroad}, Collision {has_collision}"
+          filename = os.path.join(cur_figure_folder, f"scenario_{scenario_id}.png")
+          self.plot_eposide(next_state, filename, title)
           break
         else:
           with torch.no_grad():
@@ -453,6 +479,18 @@ class SAC():
       wandb.log(eval_result, step=self.cnt_step, commit=False)
     else:
       print(eval_result)
+      
+  def plot_eposide(self, state, filename, title = None, log_traj = False):
+    img = visualization.plot_simulator_state(
+      state, use_log_traj=log_traj, 
+      highlight_obj = waymax_config.ObjectType.MODELED
+    )
+    plt.imshow(img)
+    plt.axis('off')
+    if title is not None:
+      plt.title(title, fontsize=6)
+    plt.savefig(filename, bbox_inches='tight', pad_inches=0, dpi=300)
+    plt.close()
     
   
   

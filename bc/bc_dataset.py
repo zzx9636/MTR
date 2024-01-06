@@ -13,11 +13,12 @@ class BCDataset(IterableDataset):
         self,
         data_path: str,
         sample_method: str = 'log',
-        count_cap: float = None
+        count_cap: float = None,
+        hide_history: int = 1,
     ):
         # Get all files in the directory
         self.data_path = data_path
-        
+        self.hide_history = hide_history
         # load cache file
         cache_file = os.path.join(data_path, 'cache.pkl')
         with open(cache_file, 'rb') as f:
@@ -98,7 +99,7 @@ class BCDataset(IterableDataset):
             bin_idx = np.random.choice(len(self.sample_p), p=self.sample_p)
             cache_id = np.random.randint(self.histogram[bin_idx])
             cache = self.idx_cache[bin_idx][cache_id]
-            input_dict = self.retrive_one(cache)
+            input_dict = self.retrive_one(cache, hide_history=self.hide_history)
             yield input_dict
 
 

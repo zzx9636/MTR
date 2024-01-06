@@ -72,8 +72,8 @@ class BehaviorCloning(pl.LightningModule):
             else:
                 n = (step - warmup_step) // step_size
                 lr_scale = gamma**n
-            if lr_scale < 1e-3:
-                lr_scale = 1e-3
+            if lr_scale < 1e-2:
+                lr_scale = 1e-2
 
             return lr_scale
 

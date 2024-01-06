@@ -370,32 +370,31 @@ class BCDecoder(nn.Module):
         if best:
             best_idx = torch.argmax(pred_scores, dim=-1)
             sample = pred_ctrls[torch.arange(pred_ctrls.shape[0]), best_idx, :2]
-            sample_action_log_prob = gmm.log_prob(sample)
             # sample = torch.clamp(sample, -1, 1)
-            sample = sample * self.output_std + self.output_mean
         else:
             # Sample from all Gaussian
             sample_all = mode.rsample() # [Batch, M, 3]
-            sample_all_log_prob = mode.log_prob(sample_all)
+            # sample_all_log_prob = mode.log_prob(sample_all)
             
             sample_mode = mix.sample() # [Batch]
-            sample_mode_log_prob = mix.log_prob(sample_mode)
+            # sample_mode_log_prob = mix.log_prob(sample_mode)
             
-            sample_action = torch.gather(
+            sample = torch.gather(
                 sample_all, 
                 1, 
                 sample_mode.unsqueeze(-1).unsqueeze(-1).repeat_interleave(sample_all.shape[-1], dim=-1)
             ).squeeze(-2)
             
-            sample_action_log_prob = torch.gather(
-                sample_all_log_prob, 
-                1, 
-                sample_mode.unsqueeze(-1)
-            ).squeeze(-1)  + sample_mode_log_prob
+            # sample_action_log_prob = torch.gather(
+            #     sample_all_log_prob, 
+            #     1, 
+            #     sample_mode.unsqueeze(-1)
+            # ).squeeze(-1)  + sample_mode_log_prob
             
-            sample = sample_action * self.output_std + self.output_mean
+        sample_action_log_prob = gmm.log_prob(sample)
+        sample_unnorm = sample * self.output_std + self.output_mean
             
         return {
-                'sample': sample,
+                'sample': sample_unnorm,
                 'log_prob': sample_action_log_prob
             }

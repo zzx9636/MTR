@@ -31,6 +31,7 @@ class ReachAvoidMetrics(abstract_reward_function.AbstractRewardFunction):
   def __init__(self, config: _config.LinearCombinationRewardConfig):
     
     self._config = config
+    self._rewards = config.rewards
     self._run_overlap = 'overlap' in config.rewards.keys()
     self._run_offroad = 'offroad' in config.rewards.keys()
     self._run_kinemetics = 'kinematics' in config.rewards.keys()
@@ -54,15 +55,32 @@ class ReachAvoidMetrics(abstract_reward_function.AbstractRewardFunction):
     """
 
     reward_dict = {}
+    
+    current_object_state = datatypes.dynamic_slice(
+        simulator_state.sim_trajectory,
+        simulator_state.timestep,
+        1,
+        -1,
+    )
       
     # Run interaction metric if specified.
     if self._run_overlap:
-      reward_dict['overlap'] = self.overlap_metric.compute(simulator_state) 
+      reward_dict['overlap'] = self.overlap_metric.compute_overlap(
+        current_object_state,
+        scale = self._rewards['overlap']
+      ) 
     
     if self._run_offroad:
-      reward_dict['offroad'] = self.offroad_metric.compute(simulator_state)
+      reward_dict['offroad'] = self.offroad_metric.compute_distance(
+        current_object_state,
+        simulator_state.roadgraph_points,
+        scale = self._rewards['offroad']
+      )
       
     if self._run_kinemetics: 
-      reward_dict['kinematics'] = self.kinematics_metric.compute(simulator_state)
+      reward_dict['kinematics'] = self.kinematics_metric.compute(
+        simulator_state,
+        scale=self._rewards['kinematics']
+      )
 
     return reward_dict

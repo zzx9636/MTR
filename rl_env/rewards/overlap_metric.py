@@ -262,7 +262,7 @@ class OverlapMetric(abstract_metric.AbstractMetric):
 
     @jax.named_scope('InteractionMetric.compute')
     def compute(
-        self, simulator_state: datatypes.SimulatorState
+        self, simulator_state: datatypes.SimulatorState, scale: float = 1.0
     ) -> abstract_metric.MetricResult:
         current_object_state = datatypes.dynamic_slice(
             simulator_state.sim_trajectory,
@@ -270,10 +270,10 @@ class OverlapMetric(abstract_metric.AbstractMetric):
             1,
             -1,
         )
-        return self.compute_overlap(current_object_state)
+        return self.compute_overlap(current_object_state, scale=scale)
     
     def compute_overlap(
-        self, current_traj: datatypes.Trajectory
+        self, current_traj: datatypes.Trajectory, scale: float = 1.0
     ) -> abstract_metric.MetricResult:
         """Computes the interaction metric.
     
@@ -284,15 +284,17 @@ class OverlapMetric(abstract_metric.AbstractMetric):
         Returns:
         A (num_objects, num_objects) MetricResult of pairwise distance.
         """
-        traj_5dof = current_traj.stack_fields(['x', 'y', 'length', 'width', 'yaw']).squeeze(-2)
-        num_obj = traj_5dof.shape[0]
+        # traj_5dof = current_traj.stack_fields(['x', 'y', 'length', 'width', 'yaw']).squeeze(-2)
+        # num_obj = traj_5dof.shape[0]
 
         # Shape: (num_objects, 5)
         
         # Get corners of the bounding boxes
-        # Shape: (num_objects, 4, 2)
-        corners = geometry.corners_from_bboxes(traj_5dof)
-        corners_all = jnp.expand_dims(corners, axis = 1).repeat(num_obj, axis=1) # Shape: (num_objects, num_objects, 4, 2)
+        # Shape: (num_objects, 1, 4, 2)
+        # corners = geometry.corners_from_bboxes(traj_5dof)
+        corners = current_traj.bbox_corners
+        num_obj = corners.shape[0]
+        corners_all = corners.repeat(num_obj, axis=1) # Shape: (num_objects, num_objects, 4, 2)
         corners_all_transpose = corners_all.transpose((1, 0, 2, 3)) # Shape: (num_objects, num_objects, 4, 2)
         
         corners_all = corners_all.reshape(-1, 4, 2)
@@ -314,5 +316,5 @@ class OverlapMetric(abstract_metric.AbstractMetric):
         signed_distance = jnp.where(valid, signed_distance, 1e3)
                         
         return abstract_metric.MetricResult.create_and_validate(
-            value = jnp.asarray(signed_distance), valid = valid
+            value = signed_distance*scale, valid = valid
         )    

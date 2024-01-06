@@ -15,7 +15,8 @@ class OffroadMetric(abstract_metric.AbstractMetric):
 
   @jax.named_scope('OffroadMetric.compute')
   def compute(
-      self, simulator_state: datatypes.SimulatorState
+      self, simulator_state: datatypes.SimulatorState,
+      scale: float = 1.0
   ) -> abstract_metric.MetricResult:
     """Computes the offroad metric.
 
@@ -33,15 +34,25 @@ class OffroadMetric(abstract_metric.AbstractMetric):
         1,
         -1,
     )
-    offroad = distance_offroad(current_object_state, simulator_state.roadgraph_points)
+    return self.compute_distance(
+        current_object_state, simulator_state.roadgraph_points, scale
+    )
+  
+  def compute_distance(
+    self,
+    current_object_state: datatypes.Trajectory,
+    roadgraph_points: datatypes.RoadgraphPoints,
+    scale: float = 1.0,
+  ):
+    offroad = distance_offroad(current_object_state, roadgraph_points)
     
-    valid = current_object_state.valid[..., 0]
+    valid = current_object_state.valid.squeeze(-1)
 
     return abstract_metric.MetricResult.create_and_validate(
-        offroad, valid
+        offroad*scale, valid
     )
 
-
+@jax.jit
 def distance_offroad(
     trajectory: datatypes.Trajectory,
     roadgraph_points: datatypes.RoadgraphPoints,
@@ -66,7 +77,7 @@ def distance_offroad(
     if the value is positive.
   """
   # Shape: (..., num_objects, num_corners=4, 2).
-  bbox_corners = trajectory.bbox_corners[..., 0, :]
+  bbox_corners = trajectory.bbox_corners.squeeze(1)
   # Add in the Z dimension from the current center. This assumption will help
   # disambiguate between different levels of the roadgraph (i.e. under and over
   # passes).
@@ -96,7 +107,7 @@ def distance_offroad(
   # Shape: (..., num_objects).
   return min_distances
 
-
+@jax.jit
 def compute_signed_distance_to_nearest_road_edge_point(
     query_points: jax.Array,
     roadgraph_points: datatypes.RoadgraphPoints,
@@ -121,7 +132,7 @@ def compute_signed_distance_to_nearest_road_edge_point(
   # Shape: (..., num_points, 3).
   sampled_points = roadgraph_points.xyz
   # Shape: (num_query_points, num_points, 3).
-  differences = sampled_points - query_points[:, jnp.newaxis]
+  differences = sampled_points - jnp.expand_dims(query_points, axis=1)
   # Stretch difference in altitude to avoid over/underpasses.
   z_stretched_differences = differences * jnp.array([[[1.0, 1.0, z_stretch]]])
   square_distances = jnp.sum(z_stretched_differences**2, axis=-1)

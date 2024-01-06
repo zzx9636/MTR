@@ -124,8 +124,8 @@ class InvertibleUnicycleModel(DynamicsModel):
   def __init__(
       self,
       dt: float = 0.1,
-      max_accel: float = 6.0,
-      max_steering: float = 0.6,
+      max_accel: float = 8.0,
+      max_steering: float = 0.8,
       normalize_actions: bool = False,
   ):
     """Initializes the bounds of the action space.
@@ -216,24 +216,25 @@ class InvertibleUnicycleModel(DynamicsModel):
     if self._normalize_actions:
       accel = accel * self._max_accel
       steering = steering * self._max_steering
-    t = self._dt
-
-    
-    delta_yaw = steering * t
-    new_yaw = geometry.wrap_yaws(yaw + delta_yaw)
-    
-    new_x = x + vel_x * t + 0.5 * accel * jnp.cos(new_yaw) * t**2
-    new_y = y + vel_y * t + 0.5 * accel * jnp.sin(new_yaw) * t**2
-    
-    new_vel = speed + accel * t
-    new_vel_x = new_vel * jnp.cos(new_yaw)
-    new_vel_y = new_vel * jnp.sin(new_yaw)
+    t = self._dt / 10.0
+    for _ in range(10):
+      delta_yaw = steering * t
+      yaw = geometry.wrap_yaws(yaw + delta_yaw)
+      
+      x = x + vel_x * t + 0.5 * accel * jnp.cos(yaw) * t**2
+      y = y + vel_y * t + 0.5 * accel * jnp.sin(yaw) * t**2
+      
+      vel = speed + accel * t
+      vel_x = vel * jnp.cos(yaw)
+      vel_y = vel * jnp.sin(yaw)
+      speed = jnp.sqrt(vel_x**2 + vel_y**2)
+      
     return datatypes.TrajectoryUpdate(
-        x=new_x,
-        y=new_y,
-        yaw=new_yaw,
-        vel_x=new_vel_x,
-        vel_y=new_vel_y,
+        x=x,
+        y=y,
+        yaw=yaw,
+        vel_x=vel_x,
+        vel_y=vel_y,
         valid=trajectory.valid & action.valid,
     )
 
