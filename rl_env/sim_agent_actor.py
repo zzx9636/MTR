@@ -58,7 +58,7 @@ class SimAgentMTR(actor_core.WaymaxActorCore):
             encoded_state, is_controlled = self.encoding_state(state)
             output = self.forward_decoder(encoded_state)
          
-        actions_sampled = self.motion_decoder.sample(output, False)['sample'].detach().cpu().numpy()
+        actions_sampled = self.motion_decoder.sample(output, True)['sample'].detach().cpu().numpy()
         return sample_to_action(actions_sampled, is_controlled)
     
     def encoding_state(self, state: datatypes.SimulatorState, is_controlled: jax.Array = None):
